@@ -95,12 +95,12 @@ class TestExecutorBasicExecution:
         from devops_agent.safety.executor import execute
 
         mock_proc = AsyncMock()
-        mock_proc.stdout.read.return_value = b"hello\n"
-        mock_proc.stderr.read.return_value = b""
+        mock_proc.communicate.return_value = (b"hello\n", b"")
         mock_proc.returncode = 0
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
-            result = await execute("echo hello")
+            result = await execute("echo hello", skip_security_check=True,
+                                   whitelist=["echo "])  # 测试白名单放行
 
         assert result.status == ExecutionStatus.SUCCESS
         assert "hello" in result.stdout
@@ -154,13 +154,15 @@ class TestExecutorTimeout:
 
         async def hanging_process(*args, **kwargs):
             proc = AsyncMock()
-            proc.wait = AsyncMock(side_effect=asyncio.TimeoutError())
+            proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError())
             proc.kill = AsyncMock()
             proc.pid = 99998
+            proc.returncode = None
             return proc
 
         with patch("asyncio.create_subprocess_exec", side_effect=hanging_process):
-            result = await execute("sleep 999", timeout=0.01)
+            result = await execute("sleep 999", timeout=0.01, skip_security_check=True,
+                                   whitelist=["sleep "])  # 测试白名单放行
 
         assert result.status == ExecutionStatus.TIMEOUT, \
             f"超时应返回 TIMEOUT，实际: {result.status}"
@@ -179,8 +181,7 @@ class TestExecutorNonzeroExit:
         from devops_agent.safety.executor import execute
 
         mock_proc = AsyncMock()
-        mock_proc.stdout.read.return_value = b""
-        mock_proc.stderr.read.return_value = b"No such file or directory\n"
+        mock_proc.communicate.return_value = (b"", b"No such file or directory\n")
         mock_proc.returncode = 1
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
@@ -199,12 +200,12 @@ class TestExecutorNonzeroExit:
         from devops_agent.safety.executor import execute
 
         mock_proc = AsyncMock()
-        mock_proc.stdout.read.return_value = b""
-        mock_proc.stderr.read.return_value = b"Segmentation fault\n"
+        mock_proc.communicate.return_value = (b"", b"Segmentation fault\n")
         mock_proc.returncode = -11  # SIGSEGV
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
-            result = await execute("./crash_program", timeout=5)
+            result = await execute("./crash_program", timeout=5, skip_security_check=True,
+                                   whitelist=["./"])  # 测试白名单放行
 
         assert result.status == ExecutionStatus.FAILED
         assert result.exit_code != 0
@@ -223,8 +224,7 @@ class TestExecutorSecurityIntegration:
 
         # 用一个会通过校验的命令
         mock_proc = AsyncMock()
-        mock_proc.stdout.read.return_value = b"total 100G\n"
-        mock_proc.stderr.read.return_value = b""
+        mock_proc.communicate.return_value = (b"total 100G\n", b"")
         mock_proc.returncode = 0
 
         subprocess_called = False
@@ -257,8 +257,7 @@ class TestExecutorAuditTrail:
         from devops_agent.safety.executor import execute
 
         mock_proc = AsyncMock()
-        mock_proc.stdout.read.return_value = b"ok\n"
-        mock_proc.stderr.read.return_value = b""
+        mock_proc.communicate.return_value = (b"ok\n", b"")
         mock_proc.returncode = 0
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_proc):

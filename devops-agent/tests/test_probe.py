@@ -167,7 +167,7 @@ class TestDiskUsageProbe:
         )
 
         mock_process = AsyncMock()
-        mock_process.stdout.read.return_value = df_output.encode("utf-8")
+        mock_process.communicate.return_value = (df_output.encode("utf-8"), b"")
         mock_process.returncode = 0
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
@@ -199,7 +199,7 @@ class TestDiskUsageProbe:
         from devops_agent.probe.disk import disk_usage
 
         mock_process = AsyncMock()
-        mock_process.stdout.read.return_value = b"garbage broken output\n"
+        mock_process.communicate.return_value = (b"garbage broken output\n", b"")
         mock_process.returncode = 0
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
@@ -232,7 +232,7 @@ class TestLargeFilesProbe:
         )
 
         mock_process = AsyncMock()
-        mock_process.stdout.read.return_value = du_output.encode("utf-8")
+        mock_process.communicate.return_value = (du_output.encode("utf-8"), b"")
         mock_process.returncode = 0
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
@@ -262,15 +262,15 @@ class TestProcessListProbe:
         """
         from devops_agent.probe.process import process_list
 
-        # Mock ps 命令输出
+        # Mock ps 命令输出（ps aux --no-headers 格式：11列）
+        # USER PID %CPU %MEM VSZ RSS TTY STAT START TIME COMMAND
         ps_output = (
-            "PID  USER  %CPU %MEM  COMMAND\n"
-            "1234 mysql  5.2  3.1  /usr/sbin/mysqld --defaults-file=/etc/mysql/my.cnf\n"
-            "5678 root   0.0  0.1  grep mysql\n"
+            "1234 mysql  5.2  3.1  512000 124000 ? Ssl 10:00 0:05 /usr/sbin/mysqld --defaults-file=/etc/mysql/my.cnf\n"
+            "5678 root   0.0  0.1   30000  5000 pts/0 S+ 10:01 0:00 grep mysql\n"
         )
 
         mock_process = AsyncMock()
-        mock_process.stdout.read.return_value = ps_output.encode("utf-8")
+        mock_process.communicate.return_value = (ps_output.encode("utf-8"), b"")
         mock_process.returncode = 0
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
@@ -300,25 +300,20 @@ class TestProbeTimeout:
         """
         from devops_agent.probe.disk import disk_usage
 
-        # 创建一个永远 hang住的 mock 进程
-        hanging_process = AsyncMock()
-        hanging_process.wait.side_effect = asyncio.TimeoutError()
-
-        # 模拟 create_subprocess_exec 在 wait 时超时
-        original_create = asyncio.create_subprocess_exec
-
+        # 创建一个永远 hang住的 mock 进程（communicate 超时）
         async def slow_subprocess(*args, **kwargs):
             proc = AsyncMock()
-            proc.wait = AsyncMock(side_effect=asyncio.TimeoutError())
+            proc.communicate = AsyncMock(side_effect=asyncio.TimeoutError())
             proc.kill = AsyncMock()
             proc.pid = 99999
+            proc.returncode = None
             return proc
 
         with patch("asyncio.create_subprocess_exec", side_effect=slow_subprocess):
             result = await disk_usage(timeout=0.01)  # 10ms 超时
 
         # 要么抛出异常被我们捕获，要么返回 TIMEOUT 状态
-        assert result.status == ProbeStatus.TIMEOUT or "timeout" in (result.error or "").lower()
+        assert result.status == ProbeStatus.TIMEOUT or "timeout" in (result.error or "").lower() or "超时" in (result.error or "")
 
 
 @requires_linux
@@ -333,7 +328,7 @@ class TestEmptyResults:
 
         # du 返回空结果
         mock_process = AsyncMock()
-        mock_process.stdout.read.return_value = b""
+        mock_process.communicate.return_value = (b"", b"")
         mock_process.returncode = 0
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
@@ -349,11 +344,10 @@ class TestEmptyResults:
         from devops_agent.probe.process import process_list
 
         ps_output = (
-            "PID  USER  %CPU %MEM  COMMAND\n"
-            "1234 root   0.0  0.1  /sbin/init\n"
+            "1234 root   0.0  0.3  219000 14000 ? Ss 08:00 0:35 /usr/lib/systemd/systemd\n"
         )
         mock_process = AsyncMock()
-        mock_process.stdout.read.return_value = ps_output.encode("utf-8")
+        mock_process.communicate.return_value = (ps_output.encode("utf-8"), b"")
         mock_process.returncode = 0
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
@@ -382,7 +376,7 @@ class TestNetworkProbe:
         )
 
         mock_process = AsyncMock()
-        mock_process.stdout.read.return_value = ss_output.encode("utf-8")
+        mock_process.communicate.return_value = (ss_output.encode("utf-8"), b"")
         mock_process.returncode = 0
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
@@ -418,7 +412,7 @@ class TestLogProbe:
         )
 
         mock_process = AsyncMock()
-        mock_process.stdout.read.return_value = journalctl_output.encode("utf-8")
+        mock_process.communicate.return_value = (journalctl_output.encode("utf-8"), b"")
         mock_process.returncode = 0
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_process):
