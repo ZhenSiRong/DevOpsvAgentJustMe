@@ -1,0 +1,65 @@
+# DevOps Agent - 运维智能体
+# 面向国产化环境（龙芯 loongarch64 + 麒麟V11）的运维 Agent 平台
+
+[project]
+name = "devops-agent"
+version = "0.1.0"
+description = "DevOps Agent - 自然语言驱动的 Linux 运维智能体"
+requires-python = ">=3.12"
+dependencies = [
+    # Web 框架
+    "fastapi==0.109.0",
+    "uvicorn[standard]==0.27.1",
+    "websockets==12.0",
+    "python-multipart==0.0.9",
+
+    # 数据库
+    "aiosqlite==0.19.0",
+
+    # 数据校验
+    "pydantic==2.6.0",
+    "pydantic-settings==2.1.0",
+
+    # HTTP 客户端（LLM 调用）
+    "httpx==0.26.0",
+
+    # LLM SDK
+    "openai>=1.10.0",
+    "claudette-agent-sdk>=0.1.0",  # nanoclaw-py 基座 SDK: query/tool/create_sdk_mcp_server
+
+    # 基座工具（从 nanoclaw-py 继承）
+    "python-dotenv>=1.0.0",
+    "croniter>=2.0.0",  # 定时任务 cron 解析（可选功能）
+
+    # 认证
+    "python-jose[cryptography]==3.3.0",
+    "passlib[bcrypt]==1.7.4",
+
+    # 工具
+    "tiktoken>=0.5.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==7.4.4",
+    "pytest-asyncio==0.23.3",
+    "pytest-cov==4.1.0",
+    "ruff==0.1.13",
+    "httpx",  # 用于 TestClient
+]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]

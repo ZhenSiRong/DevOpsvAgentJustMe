@@ -1,0 +1,148 @@
+基于之前画的三层架构图 + 核心流程时序图，接口契约可以这样定义：
+
+---
+
+## RESTful API 接口清单
+
+### 1. 对话交互（核心链路）
+
+```
+POST /api/v1/chat
+请求：
+{
+  "message": "帮我清理系统垃圾",
+  "session_id": "uuid-xxx",    // 可选，不传则新建会话
+  "stream": true                // 可选，默认 true 流式返回
+}
+响应（stream=true）:
+  SSE: data: {"type": "content", "chunk": "..."}
+  SSE: data: {"type": "tool_call", "name": "probe.disk_usage", "args": {...}}
+  SSE: data: {"type": "audit", "phase": "security_check", "result": "PASSED"}
+  SSE: data: {"type": "done"}
+
+响应（stream=false）:
+{
+  "id": "msg-uuid",
+  "session_id": "uuid-xxx",
+  "role": "assistant",
+  "content": "已完成清理，释放 4.2GB 空间...",
+  "tool_calls": [...],
+  "audit_trail": ["received", "sense", "inference", "security", "execution"],
+  "timestamp": "2026-04-21T17:00:00Z"
+}
+```
+
+### 2. OS 环境感知（直查探针，绕过 LLM）
+
+```
+GET /api/v1/probe/{type}
+路径参数 type：disk | process | network | logs | all
+查询参数：?path=/var/log&top_n=10
+
+响应：
+{
+  "type": "disk",
+  "timestamp": "...",
+  "data": {"/": {"used": "42G", "total": "100G", "usage%": 42}, ...},
+  "duration_ms": 120
+}
+```
+
+### 3. 会话管理 CRUD
+
+```
+GET    /api/v1/sessions              // 列表（分页）
+GET    /api/v1/sessions/:id          // 详情（含消息列表）
+POST   /api/v1/sessions              // 新建（传 title）
+PUT    /api/v1/sessions/:id          // 改标题
+DELETE /api/v1/sessions/:id          // 删除
+```
+
+### 4. 审计日志查询
+
+```
+GET /api/v1/audit-logs?session_id=xxx&phase=security&limit=50
+
+响应：
+{
+  "total": 12,
+  "items": [
+    {
+      "id": 1,
+      "session_id": "uuid-xxx",
+      "phase": "security_check",
+      "content": "校验 cleanup_logs(/var/log/app.log): PASSED",
+      "status": "ok",
+      "duration_ms": 3,
+      "timestamp": "2026-04-21T17:01:02Z"
+    }
+  ]
+}
+```
+
+### 5. 认证
+
+```
+POST /api/v1/auth/login       // 登录 → 返回 JWT token
+POST /api/v1/auth/register    // 注册（MVP 可选）
+POST /api/v1/auth/refresh     // 刷新 token
+```
+
+---
+
+## WebSocket 接口
+
+```
+WS /api/v1/ws/chat
+客户端发送：
+{"action": "send", "session_id": "uuid", "message": "清理垃圾"}
+
+服务端推送：
+{"type": "thinking"}                          // Agent 开始思考
+{"type": "probe_result", "data": {...}}      // 探针结果
+{"type": "audit_log", "phase": "security", "result": "PASSED"}
+{"type": "content", "chunk": "..."}           // 文本流式片段
+{"type": "done", "message_id": "msg-xxx"}     // 完成
+```
+
+---
+
+## 统一错误格式
+
+```json
+{
+  "error": {
+    "code": "SECURITY_BLOCKED",
+    "message": "操作被安全校验器拦截：目标文件属于数据库日志保护范围",
+    "details": { "blocked_path": "/var/lib/mysql/mysql.log" },
+    "request_id": "req-uuid"
+  }
+}
+```
+
+错误码分类：
+
+| 前缀 | 含义 |
+|------|------|
+| `VALIDATION_*` | 参数校验失败 |
+| `AUTH_*` | 认证授权问题 |
+| `SECURITY_*` | 安全校验拦截（赛题核心） |
+| `PROBE_*` | 探针执行异常 |
+| `LLM_*` | 模型调用超时或失败 |
+| `EXECUTION_*` | 命令执行失败 |
+
+---
+
+## 接口与赛题需求的映射
+
+| 接口 | 对应需求 |
+|------|---------|
+| `POST /chat` + SSE 流式 | 需求 1（OS感知）+ 需求 3（安全校验）+ 需求 5（推理溯源） |
+| `GET /probe/{type}` | 需求 1（OS 环境深度感知）的直查入口 |
+| 审计日志写入点 | 需求 5（五段式闭环日志） |
+| 执行引擎内部 sudo 切换 | 需求 4（最小权限执行） |
+| `@tool()` MCP 注册 | 需求 2（MCP 运维插件化） |
+
+---
+
+要不要我把这些接口写成 OpenAPI 3.0 规范（YAML），可以直接导入到 Swagger UI 里做前后端联调？

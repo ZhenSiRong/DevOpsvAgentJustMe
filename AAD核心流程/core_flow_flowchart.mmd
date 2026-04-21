@@ -1,0 +1,128 @@
+flowchart TD
+    subgraph L1["🟢 第一层：表现层（浏览器）"]
+        User["管理员<br/>输入自然语言指令"]
+        UI["前端界面<br/>对话交互 / 日志面板 / 会话管理"]
+    end
+
+    subgraph L2["🔵 第二层：业务逻辑层"]
+        subgraph API_GW["API 网关[技术选型：FastAPI]"]
+            R1["发送对话请求:POST /api/v1/chat"]
+            WS["流式推送:"]
+            R2["获取审计日志:GET /api/v1/audit-logs"]
+        end
+
+        subgraph AGENT_RT["Agent 运行时（nanoclaw-py 改造版）"]
+            direction TB
+            
+            subgraph PHASE1["阶段1：接收指令"]
+                P1["解析用户意图<br/>初始化审计上下文<br/>写入 audit_log: received"]
+            end
+
+            subgraph PHASE2["阶段2：环境感知"]
+                P2A["probe.disk_usage()<br/>df -h"]
+                P2B["probe.large_files()<br/>du -ah | sort"]
+                P2C["probe.process_list()<br/>ps aux | grep"]
+                P2D{"需要更多<br/>探针信息?"}
+                P2E["感知数据回填<br/>到 LLM 上下文"]
+            end
+
+            subgraph PHASE3["阶段3：推理决策"]
+                P3["LLM 推理<br/>输入: 用户指令 + 感知数据<br/>输出: tool_use 操作列表"]
+            end
+
+            subgraph PHASE4["阶段4：安全校验"]
+                P4_LOOP{"逐条扫描<br/>每个操作"}
+                P4_CHECK["校验器检查:<br/>· 路径保护规则<br/>· 文件属性<br/>· 进程持有检测<br/>· 权限合规性"]
+                P4_BRANCH{"校验结果"}
+                P4_BLOCK["🚫 BLOCKED<br/>命中保护规则<br/>跳过+警告"]
+                P4_WARN["⚠️ WARNING<br/>进程持有<br/>需人工确认"]
+                P4_ESC["🔑 ESCALATE<br/>权限不足<br/>sudo白名单检查"]
+                P4_PASS["✅ PASSED<br/>全部通过<br/>放行执行"]
+            end
+
+            subgraph PHASE5["阶段5：权限审查与执行"]
+                P5["最小权限执行引擎<br/>账户: devops-runner<br/>命令白名单 + sudo 限制<br/>subprocess 调用 → Linux FS"]
+            end
+
+            subgraph PHASE6["阶段6：结果汇总"]
+                P6A["捕获执行输出<br/>成功/失败/部分成功"]
+                P6B["LLM 生成<br/>自然语言总结回复"]
+                P6C["写入 audit_log:<br/>response_ready<br/>完整闭环记录"]
+            end
+        end
+    end
+
+    subgraph L3["🟠 第三层：数据访问层"]
+        DB_SQLite["SQLite (aiosqlite)<br/>sessions 表<br/>messages 表<br/>audit_logs 表<br/>scheduled_tasks 表"]
+        FS["Linux 文件系统<br/>/var/log, /tmp, /proc, ..."]
+    end
+
+    %% 层间主流程
+    User -->|"POST {message}"| R1
+    R1 --> P1
+    P1 --> P2A
+    
+    %% 阶段2 内部流程
+    P2A --> P2B --> P2C --> P2D
+    P2D -- "是" --> P2A
+    P2D -- "否" --> P2E
+    P2E --> P3
+    
+    %% 阶段3 → 阶段4
+    P3 -->|"tool_use 操作列表"| P4_LOOP
+    P4_LOOP --> P4_CHECK
+    P4_CHECK --> P4_BRANCH
+    
+    %% 安全校验分支
+    P4_BRANCH -- "路径命中保护规则" --> P4_BLOCK
+    P4_BRANCH -- "被活跃进程持有" --> P4_WARN
+    P4_BRANCH -- "权限不足" --> P4_ESC
+    P4_BRANCH -- "全部通过" --> P4_PASS
+    
+    P4_BLOCK -->|"记录并跳过"| P5
+    P4_WARN -->|"等待确认后放行/拒绝"| P5
+    P4_ESC -->|"白名单内→放行 / 外→拒绝"| P5
+    P4_PASS -->|"放行"| P5
+    
+    %% 阶段5 执行
+    P5 -->|"subprocess(cmd, user=devops-runner)"| FS
+    FS -->|"exit_code + output"| P5
+    P5 --> P6A
+    
+    %% 阶段6 汇总
+    P6A --> P6B --> P6C
+    P6C -->|"StreamResponse chunks"| WS
+    WS -->|"SSE 流式推送"| UI
+    UI -->|"展示回复 + 审计日志"| User
+    
+    %% 数据库写入（贯穿全程）
+    P1 -.->|"audit_log: received"| DB_SQLite
+    P4_CHECK -.->|"audit_log: security_check"| DB_SQLite
+    P5 -.->|"audit_log: execution"| DB_SQLite
+    P6C -.->|"audit_log: response_ready"| DB_SQLite
+    UI -.->|"GET audit-logs"| R2
+    R2 -.->|查询| DB_SQLite
+
+    %% 探针调用文件系统
+    P2A -.->|subprocess| FS
+    P2B -.->|subprocess| FS
+    P2C -.->|subprocess| FS
+
+    %% 样式定义
+    style L1 fill:#e8f5e9,stroke:#4caf50,stroke-width:2px
+    style L2 fill:#e3f2fd,stroke:#2196f3,stroke-width:2px
+    style L3 fill:#fff3e0,stroke:#ff9800,stroke-width:2px
+    style PHASE1 fill:#c8e6c9,stroke:#388e3c,stroke-width:1px
+    style PHASE2 fill:#bbdefb,stroke:#1976d2,stroke-width:1px
+    style PHASE3 fill:#e1bee7,stroke:#7b1fa2,stroke-width:1px
+    style PHASE4 fill:#ffecb3,stroke:#f57c00,stroke-width:1px
+    style PHASE5 fill:#ffe0b2,stroke:#ef6c00,stroke-width:1px
+    style PHASE6 fill:#f8bbd0,stroke:#c62828,stroke-width:1px
+    style P4_BLOCK fill:#ffcdd2,stroke:#c62828,stroke-width:1px
+    style P4_WARN fill:#fff9c4,stroke:#f9a825,stroke-width:1px
+    style P4_ESC fill:#e0e0e0,stroke:#616161,stroke-width:1px
+    style P4_PASS fill:#c8e6c9,stroke:#2e7d32,stroke-width:1px
+    style P2D fill:#fce4ec,stroke:#c62828,stroke-dasharray:5 5
+    style P4_BRANCH fill:#fce4ec,stroke:#c62828,stroke-dasharray:5 5
+    style DB_SQLite fill:#fff8e1,stroke:#ffa000
+    style FS fill:#efebe9,stroke:#5d4037
