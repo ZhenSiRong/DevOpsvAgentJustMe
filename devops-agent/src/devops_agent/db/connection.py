@@ -61,7 +61,11 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     raw_input       TEXT,                     -- 安全校验时记录 LLM 原始输出
     raw_output      TEXT,                     -- 记录实际执行输出
     duration_ms     INTEGER NOT NULL DEFAULT 0,
-    timestamp       TEXT NOT NULL DEFAULT (datetime('now'))
+    timestamp       TEXT NOT NULL DEFAULT (datetime('now')),
+    command         TEXT,                     -- 执行的命令（execution 阶段专用）
+    exit_code       INTEGER NOT NULL DEFAULT 0,
+    executed_by     TEXT,                     -- 执行用户（如 devops-runner）
+    source_ip       TEXT                      -- 请求来源 IP
 );
 CREATE INDEX IF NOT EXISTS idx_audit_session ON audit_logs(session_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_audit_phase ON audit_logs(phase);
@@ -111,6 +115,39 @@ CREATE TABLE IF NOT EXISTS task_run_logs (
     finished_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_task_runs ON task_run_logs(task_id, started_at);
+
+-- ========================================
+--  6. 记忆表（跨会话长期记忆）
+-- ========================================
+CREATE TABLE IF NOT EXISTS memories (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    type            TEXT NOT NULL CHECK(type IN ('fact', 'summary', 'preference', 'system_state')),
+    content         TEXT NOT NULL,
+    source_session_id TEXT,
+    importance      REAL NOT NULL DEFAULT 1.0,
+    access_count    INTEGER NOT NULL DEFAULT 0,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_memories_type ON memories(type);
+CREATE INDEX IF NOT EXISTS idx_memories_importance ON memories(importance DESC);
+
+-- ========================================
+--  7. 推理链路日志表（五段式闭环溯源）
+-- ========================================
+CREATE TABLE IF NOT EXISTS reasoning_chains (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id    TEXT NOT NULL,
+    round_number  INTEGER NOT NULL DEFAULT 1,     -- 第几轮 tool-use loop
+    stage         TEXT NOT NULL CHECK(
+        stage IN ('SENSE', 'ANALYZE', 'PLAN', 'EXECUTE', 'OUTPUT')
+    ),
+    content       TEXT NOT NULL DEFAULT '',      -- 该阶段详细内容（JSON 或文本）
+    metadata      TEXT,                          -- 补充信息 JSON（token 用量、耗时等）
+    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_reasoning_session ON reasoning_chains(session_id, round_number);
+CREATE INDEX IF NOT EXISTS idx_reasoning_stage ON reasoning_chains(stage);
 """
 
 
@@ -126,7 +163,7 @@ class DatabaseManager:
         return cls._instance
 
     async def get_db(self) -> aiosqlite.Connection:
-        if self._db is None or self._db.closed:
+        if self._db is None:
             DATA_DIR.mkdir(parents=True, exist_ok=True)
             self._db = await aiosqlite.connect(str(DATABASE_PATH))
             # 启用外键约束
@@ -137,15 +174,37 @@ class DatabaseManager:
         return self._db
 
     async def init_tables(self) -> None:
-        """执行建表 SQL（幂等，可重复调用）"""
+        """执行建表 SQL（幂等，可重复调用）+ 自动迁移"""
         db = await self.get_db()
         await db.executescript(CREATE_TABLES_SQL)
+        # 自动迁移：为 audit_logs 补充分区执行审计所需的列（兼容已有数据库）
+        await self._migrate_audit_logs(db)
         await db.commit()
         logger.info("数据库表初始化完成（7 张表）")
 
+    async def _migrate_audit_logs(self, db: aiosqlite.Connection) -> None:
+        """检查并补充 audit_logs 缺失的列（命令执行审计专用）"""
+        try:
+            cursor = await db.execute("PRAGMA table_info(audit_logs)")
+            rows = await cursor.fetchall()
+            existing_cols = {r[1] for r in rows}
+            migrations = [
+                ("command", "TEXT"),
+                ("exit_code", "INTEGER NOT NULL DEFAULT 0"),
+                ("executed_by", "TEXT"),
+                ("source_ip", "TEXT"),
+            ]
+            for col_name, col_def in migrations:
+                if col_name not in existing_cols:
+                    await db.execute(f"ALTER TABLE audit_logs ADD COLUMN {col_name} {col_def}")
+                    logger.info("迁移 audit_logs: 新增列 %s", col_name)
+        except Exception as e:
+            logger.warning("audit_logs 迁移检查失败(非阻塞): %s", e)
+
     async def close(self) -> None:
-        if self._db and not self._db.closed:
+        if self._db:
             await self._db.close()
+            self._db = None
             logger.info("数据库连接已关闭")
 
 
@@ -156,3 +215,23 @@ db_manager = DatabaseManager()
 async def get_db() -> aiosqlite.Connection:
     """FastAPI 依赖注入用：获取数据库连接"""
     return await db_manager.get_db()
+
+
+async def fetchall_as_dicts(
+    db: aiosqlite.Connection,
+    sql: str,
+    params: tuple = (),
+) -> list[dict]:
+    """执行查询并返回 dict 列表。
+
+    aiosqlite 的 execute_fetchall 默认返回 tuple，
+    此函数自动将 tuple 转为 dict（用 cursor.description 映射列名）。
+    """
+    cursor = await db.execute(sql, params)
+    rows = await cursor.fetchall()
+    if not rows:
+        await cursor.close()
+        return []
+    columns = [col[0] for col in cursor.description] if cursor.description else []
+    await cursor.close()
+    return [dict(zip(columns, row)) for row in rows]

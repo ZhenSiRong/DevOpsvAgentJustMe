@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from .config import get_settings
 from .db.connection import db_manager
@@ -73,7 +74,7 @@ def create_app() -> FastAPI:
     # ============================================================
     #  注册路由模块（Day 4 完成 — 7 个路由端点）
     # ============================================================
-    from .api.routes import health, probe, execute, chat, sessions, audit
+    from .api.routes import health, probe, execute, chat, sessions, audit, reasoning, safety
 
     app.include_router(health.router)          # /health, /api/v1/info
     app.include_router(probe.router)            # /api/v1/probe/*
@@ -81,10 +82,18 @@ def create_app() -> FastAPI:
     app.include_router(chat.router)             # /api/v1/chat
     app.include_router(sessions.router)         # /api/v1/sessions/*
     app.include_router(audit.router)            # /api/v1/audit/*
+    app.include_router(reasoning.router)        # /api/v1/reasoning/*
+    app.include_router(safety.router)           # /api/v1/safety/*
 
-    @app.get("/health")
-    async def health_check():
-        return {"status": "ok", "app": settings.app_name}
+    # 挂载前端静态文件（如果存在）
+    import os
+    static_dir = os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "dist")
+    static_dir = os.path.abspath(static_dir)
+    if os.path.isdir(static_dir):
+        app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
+        logger.info("前端静态文件已挂载: %s", static_dir)
+    else:
+        logger.warning("前端静态文件目录不存在: %s", static_dir)
 
     return app
 

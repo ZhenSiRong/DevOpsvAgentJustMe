@@ -84,7 +84,8 @@ async def execute_command(
         )
 
         # 写入审计日志（异步，不阻塞响应）
-        _audit_log_async(result, client_ip)
+        import asyncio
+        asyncio.create_task(_audit_log_async(result, client_ip, session_id=body.session_id or ""))
 
         response_data = {
             "command": result.command,
@@ -126,32 +127,41 @@ def _map_status_to_http(status: ExecutionStatus) -> int:
     return mapping.get(status, 500)
 
 
-async def _audit_log_async(result, client_ip: str):
+async def _audit_log_async(result, client_ip: str, session_id: str = ""):
     """异步写入审计日志到数据库（非阻塞）"""
     try:
-        from ...db.models import AuditLog
-        from ...db.connection import db_manager
+        from ...db.audit import append_audit_log
 
-        audit_entry = AuditLog(
-            command=result.command,
-            status=result.status.value,
+        # 状态映射：ExecutionStatus -> audit_logs.status
+        status_map = {
+            "SUCCESS": "ok",
+            "FAILED": "error",
+            "TIMEOUT": "error",
+            "REJECTED": "warning",
+            "BLOCKED": "blocked",
+        }
+        audit_status = status_map.get(result.status.value, "ok")
+
+        # 安全校验结果提取
+        security_result = None
+        if result.security_check:
+            security_result = result.security_check.get("result")
+
+        await append_audit_log(
+            session_id=session_id or "system",
+            phase="execution",
+            content=result.command[:500],
+            status=audit_status,
+            security_result=security_result,
+            blocked_reason=result.error_message[:500] if result.error_message else None,
+            raw_output=(result.stdout[:1000] if result.stdout else ""),
+            duration_ms=int(result.execution_time_ms),
+            command=result.command[:500],
             exit_code=result.exit_code,
             executed_by=result.executed_by,
-            execution_time_ms=result.execution_time_ms,
-            stdout_preview=(result.stdout[:200] if result.stdout else ""),
-            stderr_preview=(result.stderr[:200] if result.stderr else ""),
-            security_result=(
-                result.security_check.get("result")
-                if result.security_check else None
-            ),
             source_ip=client_ip,
-            created_at=datetime.now(timezone.utc),
         )
-        # TODO: 接入 DB session 后启用
-        # async with db_manager.session() as session:
-        #     session.add(audit_entry)
-        #     await session.commit()
-        logger.info("审计记录: cmd=%s status=%s by=%s",
+        logger.info("审计记录已落库: cmd=%s status=%s by=%s",
                      result.command[:50], result.status.value, result.executed_by)
     except Exception as e:
         # 审计写入失败不应影响主流程

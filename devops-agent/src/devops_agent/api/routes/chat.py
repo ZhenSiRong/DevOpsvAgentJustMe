@@ -19,8 +19,10 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
 
-from ...agent import run_agent, save_session_history, load_session_history
+from ...agent import run_agent, run_agent_stream, save_session_history, load_session_history
+from ...db import get_session, create_session, append_message, touch_session, get_messages_by_session
 from ..schemas import APIResponse, ChatRequest, ChatResponse
 
 logger = logging.getLogger(__name__)
@@ -33,23 +35,27 @@ async def chat(body: ChatRequest) -> APIResponse:
     """
     与 DevOps Agent 对话。
 
-    用户输入自然语言运维需求（如"看看磁盘使用率"、"重启 nginx 服务"），
-    Agent 通过 LLM 理解意图后调用内置工具完成操作并返回结果。
-
     完整流程：
     1. 获取/创建会话，加载历史消息
     2. 调用 agent.run_agent() 进入 Tool-Use 推理循环
-    3. LLM 分析意图 → 如需工具则安全拦截+执行→ 结果回传 → 循环直到返回纯文本
-    4. 保存消息到会话历史
-    5. 返回最终回复 + 元数据（工具轮次/token 用量/耗时）
+    3. 保存用户消息和助手回复到数据库
+    4. 返回最终回复 + 元数据
     """
     # Step 1: 会话管理
     session_id = body.session_id or _generate_session_id()
 
+    # 确保会话存在
+    if body.session_id:
+        existing = await get_session(body.session_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail=f"会话 {body.session_id} 不存在")
+    else:
+        await create_session(title="新对话", session_id=session_id)
+
     # Step 2: 加载历史消息（用于续接对话）
     history = None
     if body.session_id:
-        history = load_session_history(body.session_id)
+        history = await load_session_history(body.session_id)
 
     # Step 3: 调用 Agent 核心循环
     try:
@@ -61,23 +67,29 @@ async def chat(body: ChatRequest) -> APIResponse:
             stream=body.stream,
         )
 
-        # Step 4: 保存当前交互到会话历史
-        current_msg = {"role": "user", "content": body.message}
-        reply_msg = {"role": "assistant", "content": reply}
+        # Step 4: 保存用户消息到 DB
+        await append_message(
+            session_id=session_id,
+            role="user",
+            content=body.message,
+        )
 
-        if body.session_id:
-            existing = load_session_history(body.session_id) or []
-            existing.extend([current_msg, reply_msg])
-            save_session_history(body.session_id, existing)
-        else:
-            save_session_history(session_id, [current_msg, reply_msg])
+        # Step 5: 保存助手回复到 DB
+        await append_message(
+            session_id=session_id,
+            role="assistant",
+            content=reply,
+        )
+
+        # 更新时间戳
+        await touch_session(session_id)
 
         return APIResponse(
             data=ChatResponse(
                 session_id=ctx.session_id,
                 reply=reply,
                 role="assistant",
-                tool_calls=None,  # 工具调用已在内部循环中处理完毕
+                tool_calls=None,
                 created_at=datetime.now(timezone.utc).isoformat(),
             ).model_dump(),
         )
@@ -93,24 +105,96 @@ async def chat_history(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
 ) -> APIResponse:
-    """获取指定会话的对话历史"""
-    history = load_session_history(session_id)
-
-    if history is None:
-        raise HTTPException(status_code=404, detail=f"会话 {session_id} 不存在")
-
-    # 简单分页
-    start = (page - 1) * page_size
-    end = start + page_size
-    paginated = history[start:end]
+    """获取指定会话的对话历史（分页）"""
+    messages, total = await get_messages_by_session(session_id, page=page, page_size=page_size)
 
     return APIResponse(
         data={
             "session_id": session_id,
-            "messages": paginated,
-            "total_count": len(history),
+            "messages": [
+                {"role": m.role, "content": m.content}
+                for m in messages
+            ],
+            "total_count": total,
             "page": page,
             "page_size": page_size,
+        },
+    )
+
+
+@router.post("/chat/stream", summary="与 Agent 对话（SSE 流式）")
+async def chat_stream(body: ChatRequest) -> StreamingResponse:
+    """
+    与 DevOps Agent 对话 —— SSE 流式输出。
+
+    返回 Server-Sent Events，前端可实时看到推理进度：
+    - start → sense → analyze → plan → execute → execute_done → output → done
+
+    事件格式（每行一个 SSE 事件）：
+        event: analyze\n
+        data: {"has_tool_calls": true, "reply_preview": "..."}\n\n
+    """
+    session_id = body.session_id or _generate_session_id()
+
+    # 确保会话存在
+    if body.session_id:
+        existing = await get_session(body.session_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail=f"会话 {body.session_id} 不存在")
+    else:
+        await create_session(title="新对话", session_id=session_id)
+
+    # 加载历史
+    history = None
+    if body.session_id:
+        history = await load_session_history(body.session_id)
+
+    async def event_generator():
+        """SSE 事件生成器"""
+        import json
+
+        full_reply = ""
+        session_id_final = session_id
+
+        try:
+            async for event in run_agent_stream(
+                user_input=body.message,
+                session_id=session_id,
+                history=history,
+            ):
+                event_type = event.get("event", "unknown")
+                yield f"event: {event_type}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+                # 捕获最终回复用于保存到 DB
+                if event_type == "output":
+                    full_reply = event.get("reply", "")
+                    session_id_final = event.get("session_id", session_id)
+
+                if event_type == "done":
+                    session_id_final = event.get("session_id", session_id)
+
+        except Exception as e:
+            logger.error("流式对话异常: %s", e, exc_info=True)
+            error_event = {"event": "error", "detail": f"{type(e).__name__}: {e}"}
+            yield f"event: error\ndata: {json.dumps(error_event, ensure_ascii=False)}\n\n"
+            return
+
+        # 保存到 DB（流结束后异步保存，不阻塞响应）
+        try:
+            await append_message(session_id=session_id_final, role="user", content=body.message)
+            if full_reply:
+                await append_message(session_id=session_id_final, role="assistant", content=full_reply)
+            await touch_session(session_id_final)
+        except Exception as db_err:
+            logger.warning("流式对话后保存消息失败: %s", db_err)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # 禁用 Nginx 缓冲
         },
     )
 

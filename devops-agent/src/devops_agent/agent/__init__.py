@@ -5,6 +5,7 @@ from .core import (
     get_tool_definitions,
     build_system_prompt,
     run_agent,
+    run_agent_stream,
     dispatch_tool_call,
     save_session_history,
     load_session_history,
@@ -17,7 +18,7 @@ from .llm_client import (
 
 __all__ = [
     # 核心
-    "AgentContext", "run_agent", "dispatch_tool_call",
+    "AgentContext", "run_agent", "run_agent_stream", "dispatch_tool_call",
     # 工具
     "get_tool_definitions", "build_system_prompt",
     # 会话

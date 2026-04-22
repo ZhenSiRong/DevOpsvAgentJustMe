@@ -35,10 +35,9 @@ async def health_check() -> HealthStatus:
     # 检查 DB 连接
     db_ok = False
     try:
-        conn = await db_manager.get_connection()
-        if conn:
-            await db_manager.release_connection(conn)
-            db_ok = True
+        conn = await db_manager.get_db()
+        await conn.execute("SELECT 1")
+        db_ok = True
     except Exception:
         db_ok = False
 
@@ -78,10 +77,9 @@ async def app_info() -> APIResponse:
 
 async def _check_db() -> bool:
     try:
-        conn = await db_manager.get_connection()
-        if conn:
-            await db_manager.release_connection(conn)
-            return True
+        conn = await db_manager.get_db()
+        await conn.execute("SELECT 1")
+        return True
     except Exception:
         pass
     return False

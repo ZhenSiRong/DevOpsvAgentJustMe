@@ -75,6 +75,10 @@ class AuditLog:
     raw_output: Optional[str] = None
     duration_ms: int = 0
     timestamp: str = ""
+    command: Optional[str] = None       # 执行的命令（execution 阶段）
+    exit_code: int = 0                  # 命令退出码
+    executed_by: Optional[str] = None   # 执行用户（如 devops-runner）
+    source_ip: Optional[str] = None     # 请求来源 IP
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> AuditLog:
@@ -91,6 +95,10 @@ class AuditLog:
             raw_output=_row_get(row, "raw_output"),
             duration_ms=_row_get(row, "duration_ms", 0),
             timestamp=_row_get(row, "timestamp", ""),
+            command=_row_get(row, "command"),
+            exit_code=_row_get(row, "exit_code", 0),
+            executed_by=_row_get(row, "executed_by"),
+            source_ip=_row_get(row, "source_ip"),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -102,6 +110,10 @@ class AuditLog:
             "status": self.status,
             "duration_ms": self.duration_ms,
             "timestamp": self.timestamp,
+            "command": self.command,
+            "exit_code": self.exit_code,
+            "executed_by": self.executed_by,
+            "source_ip": self.source_ip,
         }
         if self.security_result:
             d["security_result"] = self.security_result
@@ -144,12 +156,49 @@ class ConversationState:
         )
 
 
-def _row_get(row: sqlite3.Row, key: str, default=None):
-    """sqlite3.Row 不支持 .get() 方法，用此函数替代。"""
+def _row_get(row: sqlite3.Row | tuple | dict, key: str, default=None):
+    """兼容 tuple / sqlite3.Row / dict 三种行类型的安全字段访问。"""
     try:
         return row[key]
-    except IndexError:
+    except (IndexError, TypeError):
         return default
+
+
+@dataclass
+class Memory:
+    id: int
+    type: str  # fact | summary | preference | system_state
+    content: str = ""
+    source_session_id: Optional[str] = None
+    importance: float = 1.0
+    access_count: int = 0
+    created_at: str = ""
+    updated_at: str = ""
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> Memory:
+        return cls(
+            id=row["id"],
+            type=row["type"],
+            content=_row_get(row, "content", ""),
+            source_session_id=_row_get(row, "source_session_id"),
+            importance=float(_row_get(row, "importance", 1.0)),
+            access_count=_row_get(row, "access_count", 0),
+            created_at=_row_get(row, "created_at", ""),
+            updated_at=_row_get(row, "updated_at", ""),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "type": self.type,
+            "content": self.content,
+            "source_session_id": self.source_session_id,
+            "importance": self.importance,
+            "access_count": self.access_count,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
 
 
 __all__ = [
@@ -158,4 +207,5 @@ __all__ = [
     "AuditLog",
     "Config",
     "ConversationState",
+    "Memory",
 ]

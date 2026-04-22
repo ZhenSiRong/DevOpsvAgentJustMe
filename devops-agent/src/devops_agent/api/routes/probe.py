@@ -28,7 +28,7 @@ router = APIRouter(prefix="/api/v1/probe", tags=["OS 探针"])
 # ---- 磁盘探针 ----
 
 @router.get("/disk", response_model=APIResponse, summary="磁盘使用率")
-async def probe_disk(path: str = "/") -> APIResponse:
+async def probe_disk(path: str = "/var/log") -> APIResponse:
     """
     获取指定路径的磁盘使用情况。
 
@@ -36,14 +36,12 @@ async def probe_disk(path: str = "/") -> APIResponse:
     所有操作均为只读，不修改任何系统状态。
     """
     try:
-        usage = await disk_usage(path=path)
-        big_files = await large_files(path=path, limit=10)
+        usage_result = await disk_usage(timeout=15.0)
+        big_files_result = await large_files(path=path, top_n=10, timeout=30.0)
         return APIResponse(
             data={
-                "usage": usage.to_dict() if hasattr(usage, "to_dict") else usage,
-                "large_files": [
-                    f.to_dict() if hasattr(f, "to_dict") else f for f in big_files
-                ],
+                "usage": usage_result.data if hasattr(usage_result, "data") else usage_result,
+                "large_files": big_files_result.data if hasattr(big_files_result, "data") else big_files_result,
                 "path": path,
             }
         )
@@ -80,12 +78,11 @@ async def probe_processes(
             })
 
         # 进程列表
-        processes = await process_list(filter_str=filter_by_name, limit=limit)
+        result = await process_list(filter_str=filter_by_name or "", timeout=15.0)
+        processes = result.data if hasattr(result, "data") else []
         return APIResponse(data={
-            "processes": [
-                p.to_dict() if hasattr(p, "to_dict") else p for p in processes
-            ],
-            "count": len(processes),
+            "processes": processes,
+            "count": len(processes) if isinstance(processes, list) else 0,
             "filter": filter_by_name or "all",
         })
     except Exception as e:
@@ -109,22 +106,21 @@ async def probe_network(
     """
     try:
         if action == "interfaces":
-            result = await network_interfaces()
-            items = [i.to_dict() if hasattr(i, "to_dict") else i for i in result]
-            return APIResponse(data={"interfaces": items})
+            result = await network_interfaces(timeout=10.0)
+            return APIResponse(data={"interfaces": result.data if hasattr(result, "data") else result})
 
         elif action == "dns":
             if not hostname:
                 raise HTTPException(status_code=422, detail="DNS 解析需要 hostname 参数")
-            result = await dns_resolve(hostname=hostname)
-            return APIResponse(data={"dns": result})
+            result = await dns_resolve(hostname=hostname, timeout=5.0)
+            return APIResponse(data={"dns": result.to_dict() if hasattr(result, "to_dict") else result})
 
         else:  # connections (default)
-            result = await network_connections()
-            items = [c.to_dict() if hasattr(c, "to_dict") else c for c in result]
+            result = await network_connections(timeout=15.0)
+            connections = result.data if hasattr(result, "data") else []
             return APIResponse(data={
-                "connections": items,
-                "count": len(items),
+                "connections": connections,
+                "count": len(connections) if isinstance(connections, list) else 0,
             })
 
     except HTTPException:
@@ -154,16 +150,19 @@ async def probe_logs(
     try:
         if tail_path:
             # 文件 tail 模式
-            entries = await tail_file(path=tail_path, lines=lines)
+            result = await tail_file(path=tail_path, lines=lines, timeout=10.0)
+            entries_list = result.data if hasattr(result, "data") else []
         elif grep:
             # grep 过滤模式
-            entries = await grep_log(pattern=grep, unit=unit, lines=lines)
+            result = await grep_log(pattern=grep, path=None, timeout=15.0)
+            entries_list = result.data if hasattr(result, "data") else []
         else:
             # journalctl 模式
-            entries = await journal_logs(since=since, until=until, unit=unit, lines=lines)
+            result = await journal_logs(lines=lines, since=since, until=until, timeout=30.0)
+            entries_list = result.data if hasattr(result, "data") else []
 
         result_list = []
-        for entry in entries:
+        for entry in entries_list:
             if hasattr(entry, "to_dict"):
                 result_list.append(entry.to_dict())
             elif isinstance(entry, dict):
@@ -172,8 +171,8 @@ async def probe_logs(
                 result_list.append(str(entry))
 
         return APIResponse(data={
-            "logs": result_list,
-            "count": len(result_list),
+            "logs": entries_list,
+            "count": len(entries_list) if isinstance(entries_list, list) else 0,
             "mode": "tail" if tail_path else ("grep" if grep else "journalctl"),
         })
     except FileNotFoundError as e:

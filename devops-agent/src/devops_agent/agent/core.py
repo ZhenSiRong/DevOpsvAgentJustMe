@@ -32,13 +32,20 @@ from pathlib import Path
 from typing import Any
 
 from ..config import get_settings
-from ..probe import (
-    disk_usage, large_files,
-    process_list, process_detail,
-    network_connections, network_interfaces, dns_resolve,
-    journal_logs, tail_file, grep_log,
+from ..db import (
+    create_session,
+    get_session,
+    append_message,
+    get_session_messages_all,
+    touch_session,
 )
-from ..safety.executor import execute, is_command_allowed, ExecutionStatus
+from ..db import (
+    append_reasoning_entry,
+    get_reasoning_chain,
+)
+from ..tools import get_tool_definitions as _registry_get_tool_definitions
+from ..tools import dispatch_tool as _registry_dispatch_tool
+from ..memory import get_memory_manager
 from .llm_client import (
     LLMMessage,
     ToolDefinition,
@@ -81,187 +88,10 @@ def get_tool_definitions() -> list[ToolDefinition]:
     """
     返回所有可用工具的定义列表。
 
-    每个工具包含 name、description 和 JSON Schema parameters。
-    这些信息会被注入到 system prompt 中，让 LLM 知道自己能做什么。
-
-    工具分两大类：
-    - 探针类（只读，随时可用）：磁盘/进程/网络/日志
-    - 执行类（需校验，受白名单限制）：命令执行
+    从 ToolRegistry 动态获取，支持插件化扩展。
+    新增工具只需注册到 registry，无需修改此函数。
     """
-    return [
-        # ===== 只读探针工具 =====
-        ToolDefinition(
-            name="disk_usage",
-            description="查看指定路径的磁盘使用情况。返回总空间、已用、可用、使用率百分比。",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "default": "/",
-                        "description": "要查看的文件系统路径，默认根分区 /",
-                    },
-                },
-                "required": [],
-            },
-        ),
-        ToolDefinition(
-            name="large_files",
-            description="扫描指定目录下最大的 N 个文件。用于定位占用空间大的文件。",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "default": "/",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "default": 10,
-                        "minimum": 1,
-                        "maximum": 100,
-                    },
-                },
-                "required": [],
-            },
-        ),
-        ToolDefinition(
-            name="process_list",
-            description="列出系统进程。可按进程名过滤。返回 PID、CPU%、MEM%、命令等。",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "filter_str": {
-                        "type": "string",
-                        "default": "",
-                        "description": "按进程名模糊匹配过滤，为空则返回所有进程",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "default": 50,
-                        "minimum": 1,
-                        "maximum": 500,
-                    },
-                },
-                "required": [],
-            },
-        ),
-        ToolDefinition(
-            name="process_detail",
-            description="获取单个进程的详细信息（PID、状态、打开的文件数、线程数等）。",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "pid": {
-                        "type": "integer",
-                        "description": "目标进程的 PID",
-                    },
-                },
-                "required": ["pid"],
-            },
-        ),
-        ToolDefinition(
-            name="network_connections",
-            description="查看当前网络连接（TCP/UDP）、监听端口。用于排查网络问题。",
-            parameters={
-                "type": "object",
-                "properties": {},
-            },
-        ),
-        ToolDefinition(
-            name="network_interfaces",
-            description="查看网络接口配置信息（IP 地址、MAC、状态）。",
-            parameters={
-                "type": "object",
-                "properties": {},
-            },
-        ),
-        ToolDefinition(
-            name="dns_resolve",
-            description="DNS 解析测试，查询域名的 IP 地址。用于诊断 DNS 问题。",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "hostname": {
-                        "type": "string",
-                        "description": "要解析的域名",
-                    },
-                },
-                "required": ["hostname"],
-            },
-        ),
-        ToolDefinition(
-            name="query_logs",
-            description="查询系统日志(journalctl)。支持时间范围和关键词过滤。",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "since": {
-                        "type": "string",
-                        "default": "1 hour ago",
-                        "description": "起始时间，如 '30 min ago', '2024-01-01'",
-                    },
-                    "grep": {
-                        "type": "string",
-                        "default": "",
-                        "description": "关键词过滤",
-                    },
-                    "lines": {
-                        "type": "integer",
-                        "default": 100,
-                        "minimum": 1,
-                        "maximum": 10000,
-                    },
-                },
-                "required": [],
-            },
-        ),
-        ToolDefinition(
-            name="tail_file",
-            description="读取文件末尾内容。适用于查看任意日志文件的最新输出。",
-            parameters={
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "文件绝对路径",
-                    },
-                    "lines": {
-                        "type": "integer",
-                        "default": 50,
-                    },
-                },
-                "required": ["path"],
-            },
-        ),
-
-        # ===== 安全执行工具（受校验+白名单约束） =====
-        ToolDefinition(
-            name="execute_command",
-            description=(
-                "执行一条运维命令（受安全校验和白名单限制）。"
-                "危险命令会被自动拦截。"
-                "只能执行预授权的命令类型（ls/cat/grep/systemctl/df 等）。"
-                "以 devops-runner 最小权限用户执行，超时 30s 自动终止。"
-            ),
-            parameters={
-                "type": "object",
-                "properties": {
-                    "command": {
-                        "type": "string",
-                        "description": "要执行的 shell 命令",
-                    },
-                    "timeout": {
-                        "type": "number",
-                        "default": 30,
-                        "minimum": 1,
-                        "maximum": 300,
-                    },
-                },
-                "required": ["command"],
-            },
-        ),
-    ]
+    return _registry_get_tool_definitions()
 
 
 # ============================================================
@@ -276,93 +106,18 @@ async def dispatch_tool_call(
     """
     分发工具调用到对应的实现函数。
 
-    所有工具调用都经过此函数统一调度，便于：
+    通过 ToolRegistry 动态调度，所有工具调用统一入口：
     - 记录调用日志
-    - 统计调用次数
+    - 统计调用轮次
     - 统一错误处理格式
+
+    实际执行委托给 ToolRegistry，支持插件化扩展。
     """
     ctx.tool_round += 1
     logger.info("工具调用 #%d: %s(%s)", ctx.tool_round, tool_name, arguments)
 
     try:
-        if tool_name == "disk_usage":
-            ctx.probe_call_count += 1
-            path = arguments.get("path", "/")
-            result = await disk_usage(path=path)
-            return _format_probe_result(result)
-
-        elif tool_name == "large_files":
-            ctx.probe_call_count += 1
-            path = arguments.get("path", "/")
-            limit = arguments.get("limit", 10)
-            results = await large_files(path=path, limit=limit)
-            return _format_probe_result(results, is_list=True)
-
-        elif tool_name == "process_list":
-            ctx.probe_call_count += 1
-            f = arguments.get("filter_str", "")
-            limit = arguments.get("limit", 50)
-            results = await process_list(filter_str=f, limit=limit)
-            return _format_probe_result(results, is_list=True)
-
-        elif tool_name == "process_detail":
-            ctx.probe_call_count += 1
-            pid = arguments["pid"]
-            result = await process_detail(pid=pid)
-            return _format_probe_result(result)
-
-        elif tool_name == "network_connections":
-            ctx.probe_call_count += 1
-            results = await network_connections()
-            return _format_probe_result(results, is_list=True)
-
-        elif tool_name == "network_interfaces":
-            ctx.probe_call_count += 1
-            results = await network_interfaces()
-            return _format_probe_result(results, is_list=True)
-
-        elif tool_name == "dns_resolve":
-            ctx.probe_call_count += 1
-            hostname = arguments["hostname"]
-            result = await dns_resolve(hostname=hostname)
-            return _format_probe_result(result)
-
-        elif tool_name == "query_logs":
-            ctx.probe_call_count += 1
-            since = arguments.get("since", "1 hour ago")
-            grep = arguments.get("grep", "")
-            lines = arguments.get("lines", 100)
-            entries = await journal_logs(since=since, grep=grep, lines=lines)
-            return _format_probe_result(entries, is_list=True)
-
-        elif tool_name == "tail_file":
-            ctx.probe_call_count += 1
-            path = arguments["path"]
-            lines = arguments.get("lines", 50)
-            entries = await tail_file(path=path, lines=lines)
-            return _format_probe_result(entries, is_list=True)
-
-        elif tool_name == "execute_command":
-            ctx.execution_count += 1
-            command = arguments["command"]
-            timeout = arguments.get("timeout", 30.0)
-
-            # 安全校验已在 executor 内部完成
-            result = await execute(command=command, timeout=timeout)
-
-            return {
-                "status": result.status.value,
-                "exit_code": result.exit_code,
-                "stdout": result.stdout[:3000],
-                "stderr": result.stderr[:1000] if result.stderr else "",
-                "error": result.error_message,
-                "executed_by": result.executed_by,
-                "elapsed_ms": result.execution_time_ms,
-            }
-
-        else:
-            return {"error": f"未知工具: {tool_name}", "is_error": True}
-
+        return await _registry_dispatch_tool(tool_name, arguments, ctx)
     except Exception as e:
         logger.error("工具 %s 执行异常: %s", tool_name, e, exc_info=True)
         return {
@@ -371,21 +126,7 @@ async def dispatch_tool_call(
         }
 
 
-def _format_probe_result(result, is_list: bool = False) -> dict:
-    """将探针结果格式化为 LLM 友好的字典"""
-    if is_list and hasattr(result, "__iter__"):
-        items = []
-        for r in result:
-            items.append(r.to_dict() if hasattr(r, "to_dict") else r)
-        return {"items": items, "count": len(items)}
-    
-    if hasattr(result, "to_dict"):
-        return result.to_dict()
-    
-    if isinstance(result, dict):
-        return result
-    
-    return {"raw": str(result)}
+
 
 
 # ============================================================
@@ -478,7 +219,18 @@ async def run_agent(
     ctx = AgentContext(session_id=sid)
 
     # ---- 构建 LLM 消息列表 ----
-    messages = [LLMMessage(role="system", content=build_system_prompt())]
+    system_prompt = build_system_prompt()
+
+    # 注入相关记忆（跨会话长期记忆）
+    try:
+        mm = get_memory_manager()
+        memory_text = await mm.get_memory_text_for_prompt(query=user_input)
+        if memory_text:
+            system_prompt += f"\n\n## 已知信息（来自历史会话）\n{memory_text}\n"
+    except Exception as e:
+        logger.warning("记忆注入失败（非阻塞）: %s", e)
+
+    messages = [LLMMessage(role="system", content=system_prompt)]
 
     # 注入历史消息
     if history:
@@ -497,8 +249,36 @@ async def run_agent(
             else:
                 messages.append(LLMMessage(role=role, content=content))
 
+    # ---- 提示词注入检测（Phase 2 安全层） ----
+    from ..safety.prompt_injection import scan_input
+    injection_result = scan_input(user_input)
+    if injection_result.is_blocked:
+        await append_reasoning_entry(
+            session_id=sid,
+            round_number=ctx.tool_round + 1,
+            stage="SENSE",
+            content="【提示词注入拦截】" + json.dumps(injection_result.to_dict(), ensure_ascii=False),
+        )
+        block_msg = (
+            "⚠️ 检测到安全风险，输入已被安全层拦截。\n"
+            f"最高风险等级：{injection_result.highest_severity.value}\n"
+            f"匹配攻击模式数：{injection_result.match_count}\n"
+            f"建议：{injection_result.recommendations[0] if injection_result.recommendations else '请使用安全的运维查询语言'}"
+        )
+        return block_msg, ctx
+
     # 添加当前用户输入
     messages.append(LLMMessage(role="user", content=user_input))
+
+    # ---- 五段式日志：SENSE 阶段 ----
+    import json as _json
+    await append_reasoning_entry(
+        session_id=sid,
+        round_number=ctx.tool_round + 1,
+        stage="SENSE",
+        content=_json.dumps({"user_input": user_input, "input_length": len(user_input)}, ensure_ascii=False),
+        metadata={"timestamp": time.time()},
+    )
 
     # ---- Tool-Use Loop ----
     tools_defs = get_tool_definitions()
@@ -522,7 +302,36 @@ async def run_agent(
         # 记录 token 用量
         ctx.total_llm_tokens += sum(response.usage.values())
 
-        # 记录推理链路
+        # ---- 五段式日志：ANALYZE 阶段（LLM 推理过程）----
+        await append_reasoning_entry(
+            session_id=sid,
+            round_number=ctx.tool_round + 1,
+            stage="ANALYZE",
+            content=_json.dumps({
+                "has_tool_calls": bool(response.tool_calls),
+                "finish_reason": response.finish_reason,
+                "protocol": response.protocol_used,
+                "reply_preview": (response.reply_text or "")[:200],
+                "usage": response.usage,
+            }, ensure_ascii=False, default=str),
+        )
+
+        # ---- 五段式日志：PLAN 阶段（如果有工具调用）----
+        if response.tool_calls:
+            await append_reasoning_entry(
+                session_id=sid,
+                round_number=ctx.tool_round + 1,
+                stage="PLAN",
+                content=_json.dumps({
+                    "tool_count": len(response.tool_calls),
+                    "tool_calls": [
+                        {"name": tc.get("name", ""), "args": tc.get("arguments", tc.get("args", {}))}
+                        for tc in response.tool_calls
+                    ],
+                }, ensure_ascii=False, default=str),
+            )
+
+        # 记录推理链路（旧版兼容，保留）
         ctx.reasoning_chain.append({
             "round": ctx.tool_round,
             "has_tool_calls": bool(response.tool_calls),
@@ -534,11 +343,45 @@ async def run_agent(
         # ---- 无工具调用 → 直接返回回复 ----
         if not response.tool_calls:
             elapsed = time.monotonic() - ctx.start_time
+            reply_text = response.reply_text or "（无回复）"
+
+            # ---- 五段式日志：OUTPUT 阶段 ----
+            await append_reasoning_entry(
+                session_id=sid,
+                round_number=ctx.tool_round + 1,
+                stage="OUTPUT",
+                content=_json.dumps({
+                    "reply_preview": reply_text[:300],
+                    "total_tool_rounds": ctx.tool_round,
+                    "total_executions": ctx.execution_count,
+                    "total_probe_calls": ctx.probe_call_count,
+                    "total_tokens": ctx.total_llm_tokens,
+                    "elapsed_seconds": round(elapsed, 2),
+                }, ensure_ascii=False),
+            )
+
             logger.info(
                 "会话 %s 完成: %d 轮工具调用, %d 次执行, %.1fs",
                 sid, ctx.tool_round, ctx.execution_count, elapsed,
             )
-            return response.reply_text or "（无回复）", ctx
+
+            # ---- 自动提取并保存记忆（非阻塞） ----
+            try:
+                mm = get_memory_manager()
+                await mm.extract_and_save_from_session(
+                    session_id=sid,
+                    user_input=user_input,
+                    reply=reply_text,
+                    ctx_info={
+                        "tool_rounds": ctx.tool_round,
+                        "executions": ctx.execution_count,
+                        "probe_calls": ctx.probe_call_count,
+                    },
+                )
+            except Exception as mem_err:
+                logger.warning("记忆提取失败（非阻塞）: %s", mem_err)
+
+            return reply_text, ctx
 
         # ---- 有工具调用 → 逐个执行 ----
         logger.info(
@@ -563,6 +406,20 @@ async def run_agent(
             # 执行工具
             tool_result = await dispatch_tool_call(tool_name, args, ctx)
 
+            # ---- 五段式日志：EXECUTE 阶段 ----
+            exec_content = _json.dumps({
+                "tool_name": tool_name,
+                "arguments": args,
+                "result_preview": str(tool_result)[:500],
+                "is_error": tool_result.get("is_error", False) if isinstance(tool_result, dict) else False,
+            }, ensure_ascii=False, default=str)
+            await append_reasoning_entry(
+                session_id=sid,
+                round_number=ctx.tool_round + 1,
+                stage="EXECUTE",
+                content=exec_content,
+            )
+
             # 将工具结果加入消息历史
             messages.append(LLMMessage(
                 role="tool",
@@ -584,25 +441,271 @@ async def run_agent(
 
 
 # ============================================================
-#  会话持久化
+#  SSE 流式推理 —— 推理链路事件流
 # ============================================================
 
-_session_cache: dict[str, list[dict]] = {}
+async def run_agent_stream(
+    user_input: str,
+    session_id: str | None = None,
+    history: list[dict] | None = None,
+) -> Any:
+    """
+    Agent 流式推理入口 —— 产生推理链路事件（SSE 格式）。
+
+    与 run_agent() 逻辑一致，但改为异步生成器，
+    在 tool-use loop 的每个关键阶段 yield 事件，
+    让前端实时看到 Agent 的工作进度。
+
+    事件格式：
+        {"event": "start", "session_id": "..."}
+        {"event": "sense", "status": "ok"}
+        {"event": "analyze", "has_tool_calls": true, ...}
+        {"event": "plan", "tools": [...]}
+        {"event": "execute", "tool_name": "..."}
+        {"event": "execute_done", "tool_name": "...", "result": ...}
+        {"event": "output", "reply": "...", "metrics": {...}}
+        {"event": "done", "session_id": "..."}
+    """
+    import json as _json
+    settings = get_settings()
+    sid = session_id or f"sess_{int(time.time() * 1000)}"
+    ctx = AgentContext(session_id=sid)
+
+    # ---- start 事件 ----
+    yield {
+        "event": "start",
+        "session_id": sid,
+        "timestamp": time.time(),
+    }
+
+    # ---- 构建消息列表 ----
+    system_prompt = build_system_prompt()
+    try:
+        mm = get_memory_manager()
+        memory_text = await mm.get_memory_text_for_prompt(query=user_input)
+        if memory_text:
+            system_prompt += f"\n\n## 已知信息（来自历史会话）\n{memory_text}\n"
+    except Exception as e:
+        logger.warning("记忆注入失败（非阻塞）: %s", e)
+
+    messages = [LLMMessage(role="system", content=system_prompt)]
+
+    if history:
+        for msg in history:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if role == "tool":
+                messages.append(LLMMessage(
+                    role="tool",
+                    content=_json.dumps(content, ensure_ascii=False),
+                    name=msg.get("name", ""),
+                    tool_call_id=msg.get("tool_call_id", ""),
+                ))
+            else:
+                messages.append(LLMMessage(role=role, content=content))
+
+    # ---- 提示词注入检测 ----
+    from ..safety.prompt_injection import scan_input
+    injection_result = scan_input(user_input)
+    if injection_result.is_blocked:
+        yield {
+            "event": "sense",
+            "status": "blocked",
+            "injection_checked": True,
+            "highest_severity": injection_result.highest_severity.value,
+            "match_count": injection_result.match_count,
+        }
+        block_msg = (
+            "检测到安全风险，输入已被安全层拦截。"
+            f"最高风险等级：{injection_result.highest_severity.value}"
+        )
+        yield {"event": "output", "reply": block_msg, "metrics": {}}
+        yield {"event": "done", "session_id": sid}
+        return
+
+    yield {
+        "event": "sense",
+        "status": "ok",
+        "injection_checked": True,
+    }
+
+    # 添加当前用户输入
+    messages.append(LLMMessage(role="user", content=user_input))
+
+    # ---- Tool-Use Loop ----
+    tools_defs = get_tool_definitions()
+
+    while ctx.tool_round < MAX_TOOL_ROUNDS:
+        # 调用 LLM
+        response: LLMResponse = await call_llm(
+            messages=messages,
+            protocol=LLMProtocol(settings.llm_protocol),
+            tools=tools_defs,
+            base_url=settings.llm_base_url,
+            api_key=settings.llm_api_key,
+            model=settings.llm_model,
+            temperature=settings.llm_temperature,
+            max_tokens=settings.llm_max_tokens,
+            fallback_base_url=settings.anthropic_base_url,
+            fallback_api_key=settings.anthropic_api_key,
+            fallback_model=settings.anthropic_model,
+        )
+
+        ctx.total_llm_tokens += sum(response.usage.values())
+
+        # ---- analyze 事件 ----
+        yield {
+            "event": "analyze",
+            "has_tool_calls": bool(response.tool_calls),
+            "finish_reason": response.finish_reason,
+            "protocol": response.protocol_used,
+            "reply_preview": (response.reply_text or "")[:200],
+            "usage": response.usage,
+        }
+
+        # ---- plan 事件（如果有工具调用） ----
+        if response.tool_calls:
+            yield {
+                "event": "plan",
+                "tool_count": len(response.tool_calls),
+                "tools": [
+                    {"name": tc.get("name", ""), "args": tc.get("arguments", tc.get("args", {}))}
+                    for tc in response.tool_calls
+                ],
+            }
+
+        # 无工具调用 → 直接返回
+        if not response.tool_calls:
+            elapsed = time.monotonic() - ctx.start_time
+            reply_text = response.reply_text or "（无回复）"
+
+            yield {
+                "event": "output",
+                "reply": reply_text,
+                "metrics": {
+                    "total_tool_rounds": ctx.tool_round,
+                    "total_executions": ctx.execution_count,
+                    "total_probe_calls": ctx.probe_call_count,
+                    "total_tokens": ctx.total_llm_tokens,
+                    "elapsed_seconds": round(elapsed, 2),
+                },
+            }
+
+            # 自动提取记忆
+            try:
+                mm = get_memory_manager()
+                await mm.extract_and_save_from_session(
+                    session_id=sid,
+                    user_input=user_input,
+                    reply=reply_text,
+                    ctx_info={
+                        "tool_rounds": ctx.tool_round,
+                        "executions": ctx.execution_count,
+                        "probe_calls": ctx.probe_call_count,
+                    },
+                )
+            except Exception as mem_err:
+                logger.warning("记忆提取失败（非阻塞）: %s", mem_err)
+
+            yield {"event": "done", "session_id": sid}
+            return
+
+        # 有工具调用 → 逐个执行
+        assistant_msg = LLMMessage(
+            role="assistant",
+            content=response.reply_text,
+            tool_calls=response.tool_calls,
+        )
+        messages.append(assistant_msg)
+
+        for tc in response.tool_calls:
+            tool_name = tc.get("name", "")
+            args = tc.get("arguments", tc.get("args", {}))
+            tool_id = tc.get("id", "")
+
+            # execute 事件（开始）
+            yield {
+                "event": "execute",
+                "tool_name": tool_name,
+                "arguments": args,
+            }
+
+            tool_result = await dispatch_tool_call(tool_name, args, ctx)
+
+            # execute_done 事件（完成）
+            yield {
+                "event": "execute_done",
+                "tool_name": tool_name,
+                "result_preview": str(tool_result)[:300],
+                "is_error": tool_result.get("is_error", False) if isinstance(tool_result, dict) else False,
+            }
+
+            messages.append(LLMMessage(
+                role="tool",
+                content=json.dumps(tool_result, ensure_ascii=False, default=str),
+                name=tool_name,
+                tool_call_id=tool_id,
+            ))
+
+    # 超过最大轮次
+    yield {
+        "event": "output",
+        "reply": "抱歉，本次请求涉及的操作步骤过多，已自动中止。请尝试简化您的需求。",
+        "metrics": {},
+    }
+    yield {"event": "done", "session_id": sid}
 
 
-def save_session_history(session_id: str, messages: list[dict]) -> None:
-    """保存会话消息历史到内存缓存（后续接入 DB）"""
-    _session_cache[session_id] = messages
+# ============================================================
+#  会话持久化（DB 版）
+# ============================================================
 
 
-def load_session_history(session_id: str) -> list[dict] | None:
-    """加载会话消息历史"""
-    return _session_cache.get(session_id)
+async def save_session_history(session_id: str, messages: list[dict]) -> None:
+    """
+    保存会话消息历史到数据库。
+
+    对每条消息执行 upsert 语义：通过 session_id + role + content 前 100 字符
+    做幂等判断，避免重复写入。如果会话不存在则自动创建。
+    """
+    # 确保会话存在
+    existing = await get_session(session_id)
+    if not existing:
+        await create_session(title="新对话")
+
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = msg.get("content", "")
+        tool_calls = msg.get("tool_calls")
+        await append_message(
+            session_id=session_id,
+            role=role,
+            content=content,
+            tool_calls=tool_calls if isinstance(tool_calls, list) else None,
+        )
+
+    # 更新会话时间戳
+    await touch_session(session_id)
+
+
+async def load_session_history(session_id: str) -> list[dict] | None:
+    """从数据库加载会话消息历史，返回 LLM 格式的 dict 列表。"""
+    messages = await get_session_messages_all(session_id)
+    if not messages:
+        return None
+
+    return [
+        {
+            "role": m.role,
+            "content": m.content,
+            "tool_calls": m.tool_calls or None,
+        }
+        for m in messages
+    ]
 
 
 def clear_session(session_id: str) -> None:
-    """清除会话"""
-    _session_cache.pop(session_id, None)
+    """清除内存缓存中的会话（兼容接口，DB 中用 delete_session）"""
 
 
 __all__ = [

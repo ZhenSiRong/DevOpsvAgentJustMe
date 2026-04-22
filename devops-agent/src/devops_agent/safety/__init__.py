@@ -20,6 +20,25 @@ from .executor import (
     is_command_allowed,
     EXECUTION_WHITELIST,
 )
+from .config_guard import (
+    ConfigGuard,
+    FileBaseline,
+    FileChangeReport,
+    WriteCheckResult,
+    ConfigProtectionLevel,
+    ChangeStatus,
+)
+from .prompt_injection import (
+    PromptInjectionShield,
+    ScanResult,
+    InjectionMatch,
+    InjectionSeverity,
+    InjectionPattern,
+    isolate_user_input,
+    scan_input,
+    is_input_safe,
+    get_shield,
+)
 
 __all__ = [
     # 安全校验器
@@ -40,4 +59,21 @@ __all__ = [
     "execute_safe",
     "is_command_allowed",
     "EXECUTION_WHITELIST",
+    # 配置写保护
+    "ConfigGuard",
+    "FileBaseline",
+    "FileChangeReport",
+    "WriteCheckResult",
+    "ConfigProtectionLevel",
+    "ChangeStatus",
+    # 抗提示词注入
+    "PromptInjectionShield",
+    "ScanResult",
+    "InjectionMatch",
+    "InjectionSeverity",
+    "InjectionPattern",
+    "isolate_user_input",
+    "scan_input",
+    "is_input_safe",
+    "get_shield",
 ]
