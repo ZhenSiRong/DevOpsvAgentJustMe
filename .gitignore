@@ -49,3 +49,7 @@ Thumbs.db
 
 # Artifact output
 generated-images/
+
+# Frontend
+node_modules/
+frontend-dist.zip

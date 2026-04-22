@@ -50,7 +50,7 @@ async def chat(body: ChatRequest) -> APIResponse:
         if not existing:
             raise HTTPException(status_code=404, detail=f"会话 {body.session_id} 不存在")
     else:
-        await create_session(title="新对话", session_id=session_id)
+        await create_session(title=_make_title(body.message), session_id=session_id)
 
     # Step 2: 加载历史消息（用于续接对话）
     history = None
@@ -142,7 +142,7 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
         if not existing:
             raise HTTPException(status_code=404, detail=f"会话 {body.session_id} 不存在")
     else:
-        await create_session(title="新对话", session_id=session_id)
+        await create_session(title=_make_title(body.message), session_id=session_id)
 
     # 加载历史
     history = None
@@ -211,3 +211,11 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
 def _generate_session_id() -> str:
     """生成新的会话 ID"""
     return f"sess_{uuid.uuid4().hex[:12]}"
+
+
+def _make_title(message: str, max_len: int = 20) -> str:
+    """从用户消息中提取会话标题"""
+    cleaned = message.replace('\n', ' ').replace('\r', '').strip()
+    if len(cleaned) > max_len:
+        return cleaned[:max_len] + '...'
+    return cleaned if cleaned else '新对话'
