@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Send, Loader2, Bot, User, Sparkles, Terminal, AlertTriangle, MessageSquare } from 'lucide-react'
+import { Send, Loader2, Bot, User, Sparkles, Terminal, AlertTriangle, MessageSquare, ChevronDown, ChevronRight } from 'lucide-react'
 import { streamChatFetch, sendChat, listSessions, getSession, deleteSession } from '../api/client'
 
 const EVENT_LABELS = {
@@ -117,11 +117,14 @@ export default function ChatPage() {
     let assistantReply = ''
     let finalSessionId = currentSessionId
     let streamError = null
+    const currentStreamEvents = []
 
     try {
       await streamChatFetch(userMessage, currentSessionId, (eventType, payload) => {
         setActiveEvent(eventType)
-        setStreamEvents(prev => [...prev, { type: eventType, payload, time: Date.now() }])
+        const evt = { type: eventType, payload, time: Date.now() }
+        setStreamEvents(prev => [...prev, evt])
+        currentStreamEvents.push(evt)
 
         if (eventType === 'output') {
           assistantReply = payload.reply || ''
@@ -132,12 +135,13 @@ export default function ChatPage() {
         }
       })
 
-      // 添加助手回复（或错误提示）
+      // 添加助手回复（或错误提示），绑定推理链路
       if (assistantReply) {
         setMessages(prev => [...prev, {
           role: 'assistant',
           content: assistantReply,
           id: 'assistant-' + Date.now(),
+          reasoningEvents: currentStreamEvents.length > 0 ? [...currentStreamEvents] : undefined,
         }])
       } else if (streamError) {
         setMessages(prev => [...prev, {
@@ -145,6 +149,7 @@ export default function ChatPage() {
           content: `❌ Agent 推理异常: ${streamError}`,
           id: 'error-' + Date.now(),
           isError: true,
+          reasoningEvents: currentStreamEvents.length > 0 ? [...currentStreamEvents] : undefined,
         }])
       }
 
@@ -219,6 +224,22 @@ export default function ChatPage() {
 
       {/* 聊天主区域 */}
       <div className="flex-1 flex flex-col min-w-0">
+        {/* Session ID 标签栏 */}
+        <div className="shrink-0 px-4 py-1.5 bg-slate-900/80 border-b border-slate-800 flex items-center justify-between">
+          <div className="flex items-center gap-2 text-xs">
+            <span className="text-slate-500">会话ID:</span>
+            <span className="font-mono text-slate-300 bg-slate-800 px-2 py-0.5 rounded">
+              {currentSessionId || '新对话'}
+            </span>
+          </div>
+          {isStreaming && (
+            <div className="flex items-center gap-1.5 text-xs text-primary-400">
+              <Loader2 className="w-3 h-3 animate-spin" />
+              <span>{EVENT_LABELS[activeEvent] || '处理中...'}</span>
+            </div>
+          )}
+        </div>
+
         {/* 消息列表 */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-thin">
           {messages.length === 0 && !isStreaming && (
@@ -252,18 +273,53 @@ export default function ChatPage() {
                   <Bot className="w-4 h-4 text-primary-400" />
                 </div>
               )}
-              <div
-                className={`
-                  max-w-[85%] sm:max-w-[75%] rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap
-                  ${msg.role === 'user'
-                    ? 'bg-primary-600 text-white'
-                    : msg.isError
-                      ? 'bg-red-900/20 border border-red-800/30 text-red-200'
-                      : 'bg-slate-800 text-slate-200'
-                  }
-                `}
-              >
-                {msg.content}
+              <div className="max-w-[85%] sm:max-w-[75%]">
+                <div
+                  className={`
+                    rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap
+                    ${msg.role === 'user'
+                      ? 'bg-primary-600 text-white'
+                      : msg.isError
+                        ? 'bg-red-900/20 border border-red-800/30 text-red-200'
+                        : 'bg-slate-800 text-slate-200'
+                    }
+                  `}
+                >
+                  {msg.content}
+                </div>
+                {/* 推理链路折叠面板（仅 assistant 消息） */}
+                {msg.role === 'assistant' && msg.reasoningEvents && msg.reasoningEvents.length > 0 && (
+                  <details className="mt-1.5 group">
+                    <summary className="flex items-center gap-1 text-xs text-slate-500 cursor-pointer hover:text-slate-300 select-none list-none">
+                      <ChevronRight className="w-3 h-3 group-open:hidden" />
+                      <ChevronDown className="w-3 h-3 hidden group-open:inline" />
+                      <span>推理链路</span>
+                      <span className="text-slate-600">({msg.reasoningEvents.length} 事件)</span>
+                    </summary>
+                    <div className="mt-1.5 bg-slate-900/60 border border-slate-800 rounded-lg px-3 py-2 space-y-1">
+                      {msg.reasoningEvents.map((evt, idx) => (
+                        <div key={evt.time + idx} className="flex items-center gap-2 text-xs">
+                          <span className={`font-medium shrink-0 ${EVENT_COLORS[evt.type] || 'text-slate-400'}`}>
+                            {EVENT_LABELS[evt.type] || evt.type}
+                          </span>
+                          {evt.payload?.tool_name && (
+                            <span className="text-slate-500 font-mono">{evt.payload.tool_name}</span>
+                          )}
+                          {evt.payload?.reply_preview && (
+                            <span className="text-slate-500 truncate max-w-[200px]">
+                              {evt.payload.reply_preview}
+                            </span>
+                          )}
+                          {evt.payload?.detail && (
+                            <span className="text-slate-500 truncate max-w-[200px]">
+                              {evt.payload.detail}
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                )}
               </div>
               {msg.role === 'user' && (
                 <div className="w-8 h-8 rounded-lg bg-slate-700 flex items-center justify-center shrink-0">
