@@ -36,6 +36,9 @@ dependencies = [
 
     # 工具
     "tiktoken>=0.5.0",
+
+    # TUI 终端客户端
+    "rich>=13.0.0",
 ]
 
 [project.optional-dependencies]
@@ -46,6 +49,9 @@ dev = [
     "ruff==0.1.13",
     "httpx",  # 用于 TestClient
 ]
+
+[project.scripts]
+devops-cli = "devops_agent.cli.main:main"
 
 [build-system]
 requires = ["setuptools>=68.0"]
