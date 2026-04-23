@@ -94,6 +94,13 @@ class DevOpsTUI:
         self.input_buffer = ""
         self.reasoning_collapsed = True  # 推理链路默认折叠
 
+        # TUI 增强状态
+        self.selected_idx: int = -1  # 会话列表选中索引（-1=未选中）
+        self.msg_offset: int = 0  # 消息显示偏移（翻页）
+        self.msg_page_size: int = 10  # 每页消息数
+        self.verbose_mode: bool = False  # 详细模式（显示推理细节）
+        self.show_think: bool = False  # 显示 think 块
+
     async def fetch_sessions(self) -> None:
         """刷新会话列表"""
         try:
@@ -319,63 +326,110 @@ class DevOpsTUI:
 
     async def handle_command(self, cmd: str) -> bool:
         """处理斜杠命令，返回是否退出"""
-        cmd = cmd.strip().lower()
+        cmd_lower = cmd.strip().lower()
+        parts = cmd_lower.split()
+        main_cmd = parts[0] if parts else ""
 
-        if cmd in ("/quit", "/exit", "/q"):
+        if main_cmd in ("/quit", "/exit", "/q"):
             return True
 
-        if cmd == "/help":
+        if main_cmd == "/help":
             self.messages.append(
                 Message(
                     role="system",
                     content="""
 [bold]命令列表:[/bold]
-  /help     - 显示帮助
-  /quit     - 退出程序
-  /new      - 创建新会话
-  /delete   - 删除当前会话
-  /refresh  - 刷新会话列表
-  /expand   - 展开推理链路
-  /collapse - 折叠推理链路
-  /sessions - 显示会话列表
+  /help              - 显示帮助
+  /quit              - 退出程序
+  /new               - 创建新会话
+  /delete            - 删除当前会话
+  /refresh           - 刷新会话列表
+  /expand            - 展开推理链路
+  /collapse          - 折叠推理链路
+  /sessions          - 显示会话列表
+  /s, /switch N      - 切换到第 N 个会话
+  /up                - 查看更早消息（上翻页）
+  /down              - 查看更新消息（下翻页）
+  /verbose           - 切换详细模式（显示推理细节）
+  /think             - 切换 think 块显示
 
 [bold]快捷键:[/bold]
   Ctrl+C    - 退出
-  ↑/↓       - 选择会话（开发中）
+  N         - 新建会话
+  D         - 删除当前会话
+  R         - 刷新会话列表
+  j/k       - 上下移动会话选择
+  1-9       - 直接切换到对应会话
 """,
                 )
             )
             return False
 
-        if cmd == "/new":
+        if main_cmd == "/new":
             await self.create_session()
             return False
 
-        if cmd == "/delete":
+        if main_cmd == "/delete":
             await self.delete_current_session()
             return False
 
-        if cmd == "/refresh":
+        if main_cmd == "/refresh":
             await self.fetch_sessions()
             return False
 
-        if cmd == "/expand":
+        if main_cmd == "/expand":
             self.reasoning_collapsed = False
             return False
 
-        if cmd == "/collapse":
+        if main_cmd == "/collapse":
             self.reasoning_collapsed = True
             return False
 
-        if cmd == "/sessions":
+        if main_cmd == "/sessions":
             await self.fetch_sessions()
             return False
 
-        self.status_text = f"[yellow]未知命令: {cmd}[/yellow]"
+        if main_cmd in ("/s", "/switch"):
+            if len(parts) >= 2 and parts[1].isdigit():
+                idx = int(parts[1]) - 1
+                if 0 <= idx < len(self.sessions):
+                    sid = self.sessions[idx].get("session_id")
+                    if sid:
+                        await self.select_session(sid)
+                        self.selected_idx = idx
+                        self.status_text = f"已切换到会话 {parts[1]}"
+                else:
+                    self.status_text = f"[yellow]无效会话编号: {parts[1]}[/yellow]"
+            else:
+                self.status_text = "[yellow]用法: /s N 或 /switch N[/yellow]"
+            return False
+
+        if main_cmd == "/up":
+            max_offset = max(0, len(self.messages) - self.msg_page_size)
+            self.msg_offset = min(self.msg_offset + self.msg_page_size, max_offset)
+            self.status_text = f"消息偏移: {self.msg_offset}"
+            return False
+
+        if main_cmd == "/down":
+            self.msg_offset = max(self.msg_offset - self.msg_page_size, 0)
+            self.status_text = f"消息偏移: {self.msg_offset}"
+            return False
+
+        if main_cmd == "/verbose":
+            self.verbose_mode = not self.verbose_mode
+            self.status_text = f"详细模式: {'开启' if self.verbose_mode else '关闭'}"
+            return False
+
+        if main_cmd == "/think":
+            self.show_think = not self.show_think
+            self.status_text = f"显示 think: {'开启' if self.show_think else '关闭'}"
+            return False
+
+        self.status_text = f"[yellow]未知命令: {main_cmd}[/yellow]"
         return False
 
     async def run(self) -> None:
-        """主循环"""
+        """主循环 —— 增强版交互式 CLI"""
         # 检查后端健康
         try:
             health = await self.client.health()
@@ -392,32 +446,73 @@ class DevOpsTUI:
         console.print("[bold bright_blue]DevOps Agent CLI[/bold bright_blue]")
         console.print("[dim]基于 Rich 的终端客户端 | /help 查看命令[/dim]\n")
 
-        # 简单的输入循环（非实时 TUI，但支持流式显示）
+        # 主输入循环
         while True:
             try:
-                # 显示当前状态
+                # 显示当前状态栏
                 console.print(f"\n[dim]{self.status_text}[/dim]")
 
-                # 显示会话列表摘要
+                # 显示会话列表（带序号和选择标记）
                 if self.sessions:
-                    console.print("\n[bold bright_blue]会话:[/bold bright_blue]")
-                    for i, s in enumerate(self.sessions[:5], 1):
+                    console.print("\n[bold bright_blue]会话列表:[/bold bright_blue]")
+                    for i, s in enumerate(self.sessions[:10], 1):
                         sid = s.get("session_id", "")[:8]
-                        title = s.get("title", "未命名")
-                        marker = "▶" if s.get("session_id") == self.current_session_id else " "
-                        console.print(f"  {marker} [{i}] {title} ({sid}...)")
+                        title = s.get("title", "未命名")[:24]
+                        is_current = s.get("session_id") == self.current_session_id
+                        is_selected = i - 1 == self.selected_idx
 
-                # 显示最近消息摘要（assistant 消息去掉 think 块）
-                if self.messages:
-                    console.print("\n[bold bright_blue]最近消息:[/bold bright_blue]")
-                    for msg in self.messages[-3:]:
-                        role = "你" if msg.role == "user" else "Agent"
-                        if msg.role == "assistant":
-                            main, _ = self.parse_think_block(msg.content)
-                            content = main[:60].replace("\n", " ") if main else ""
+                        if is_current and is_selected:
+                            marker = "[bold bright_cyan]▶>"
+                        elif is_current:
+                            marker = "[bold bright_cyan]▶ "
+                        elif is_selected:
+                            marker = "[bold yellow] >"
                         else:
-                            content = msg.content[:60].replace("\n", " ")
-                        console.print(f"  [dim]{role}:[/dim] {content}...")
+                            marker = "[dim]  "
+
+                        console.print(f"  {marker}[{i}] {title}[/] [dim]({sid}...)[/dim]")
+
+                    if len(self.sessions) > 10:
+                        console.print(f"  [dim]... 还有 {len(self.sessions) - 10} 个会话[/dim]")
+
+                # 显示消息历史（支持翻页）
+                if self.messages:
+                    total = len(self.messages)
+                    start = max(0, total - self.msg_page_size - self.msg_offset)
+                    end = total - self.msg_offset
+                    page_msgs = self.messages[start:end]
+
+                    if self.msg_offset > 0 or end < total:
+                        console.print(f"\n[bold bright_blue]消息历史[/bold bright_blue] [dim]({start + 1}-{end}/{total})[/dim]")
+                    else:
+                        console.print("\n[bold bright_blue]消息历史[/bold bright_blue]")
+
+                    for msg in page_msgs:
+                        if msg.role == "user":
+                            console.print(f"  [bold bright_green]你:[/bold bright_green] {msg.content[:80]}")
+                        elif msg.role == "assistant":
+                            main, think = self.parse_think_block(msg.content)
+                            preview = main[:80].replace("\n", " ") if main else ""
+                            think_hint = " [dim](含思考过程)[/dim]" if think else ""
+                            console.print(f"  [bold bright_blue]Agent:[/bold bright_blue] {preview}...{think_hint}")
+
+                    if total > self.msg_page_size:
+                        nav_hint = []
+                        if self.msg_offset > 0:
+                            nav_hint.append("/up 更早")
+                        if end < total:
+                            nav_hint.append("/down 更新")
+                        if nav_hint:
+                            console.print(f"  [dim]{' | '.join(nav_hint)}[/dim]")
+
+                # 显示模式状态
+                mode_flags = []
+                if self.verbose_mode:
+                    mode_flags.append("详细模式")
+                if self.show_think:
+                    mode_flags.append("显示思考")
+                if mode_flags:
+                    console.print(f"\n[dim][{' | '.join(mode_flags)}][/dim]")
 
                 # 获取输入
                 user_input = Prompt.ask("\n[bold bright_green]你[/bold bright_green]").strip()
@@ -432,7 +527,7 @@ class DevOpsTUI:
                         break
                     continue
 
-                # 快捷键处理
+                # 单字母快捷键
                 if user_input.upper() == "N":
                     await self.create_session()
                     continue
@@ -442,6 +537,36 @@ class DevOpsTUI:
                 if user_input.upper() == "R":
                     await self.fetch_sessions()
                     continue
+
+                # j/k 导航（vim 风格）
+                if user_input.lower() == "j" and self.sessions:
+                    self.selected_idx = min(self.selected_idx + 1, len(self.sessions) - 1)
+                    self.status_text = f"选中: {self.sessions[self.selected_idx].get('title', '未命名')}"
+                    continue
+                if user_input.lower() == "k" and self.sessions:
+                    self.selected_idx = max(self.selected_idx - 1, 0)
+                    self.status_text = f"选中: {self.sessions[self.selected_idx].get('title', '未命名')}"
+                    continue
+                if user_input == "" and self.selected_idx >= 0 and self.sessions:
+                    sid = self.sessions[self.selected_idx].get("session_id")
+                    if sid:
+                        await self.select_session(sid)
+                        self.status_text = f"已切换到会话 {self.selected_idx + 1}"
+                    continue
+
+                # 数字快捷键：直接选择会话
+                if user_input.isdigit():
+                    idx = int(user_input) - 1
+                    if 0 <= idx < len(self.sessions):
+                        sid = self.sessions[idx].get("session_id")
+                        if sid:
+                            await self.select_session(sid)
+                            self.selected_idx = idx
+                            self.status_text = f"已切换到会话 {user_input}"
+                        continue
+                    else:
+                        self.status_text = f"[yellow]无效的会话编号: {user_input}[/yellow]"
+                        continue
 
                 # 发送消息（流式显示）
                 await self._chat_with_stream(user_input)
@@ -455,7 +580,7 @@ class DevOpsTUI:
         await self.client.close()
 
     async def _chat_with_stream(self, message: str) -> None:
-        """带流式显示的对话"""
+        """带流式显示的对话 —— 增强版（支持 verbose 模式和 Live 渲染）"""
         if not self.current_session_id:
             sid = await self.create_session()
             if not sid:
@@ -464,45 +589,96 @@ class DevOpsTUI:
         # 显示用户消息
         console.print(f"\n[bold bright_green]你:[/bold bright_green] {message}")
 
-        # 流式接收
-        console.print(f"\n[bold bright_blue]Agent:[/bold bright_blue] ", end="")
+        # 保存用户消息到历史
+        self.messages.append(Message(role="user", content=message))
+        self.msg_offset = 0  # 重置翻页到最新
 
         content = ""
         events = []
+        think_text = ""
+        reasoning_lines: list[str] = []
+
+        # 详细模式：实时打印推理过程
+        if self.verbose_mode:
+            console.print("\n[dim]━━ 推理链路 ━━[/dim]")
 
         with console.status("[cyan]思考中...[/cyan]", spinner="dots") as status:
             async for event_name, payload in self.client.stream_chat(message, self.current_session_id):
                 events.append({"event": event_name, **payload})
 
+                icon = EVENT_ICONS.get(event_name, "•")
+                color = EVENT_COLORS.get(event_name, "white")
+
                 if event_name == "analyze":
-                    status.update("[cyan]分析中...[/cyan]")
+                    analysis = payload.get("analysis", "")
+                    status.update(f"[cyan]分析中...[/cyan]")
+                    if self.verbose_mode and analysis:
+                        reasoning_lines.append(f"[{color}]{icon} 分析: {analysis[:100]}[/{color}]")
+                        console.print(reasoning_lines[-1])
+
                 elif event_name == "plan":
                     tools = payload.get("tools", [])
                     tool_names = [t.get("name", "?") for t in tools]
                     status.update(f"[cyan]计划: {', '.join(tool_names)}[/cyan]")
+                    if self.verbose_mode:
+                        reasoning_lines.append(f"[{color}]{icon} 计划调用: {', '.join(tool_names)}[/{color}]")
+                        console.print(reasoning_lines[-1])
+
                 elif event_name == "execute":
                     tool = payload.get("tool_name", "?")
+                    args = payload.get("args", {})
                     status.update(f"[yellow]执行: {tool}...[/yellow]")
+                    if self.verbose_mode:
+                        args_str = str(args)[:60]
+                        reasoning_lines.append(f"[{color}]{icon} 执行 {tool}({args_str})[/{color}]")
+                        console.print(reasoning_lines[-1])
+
                 elif event_name == "execute_done":
+                    result = payload.get("result", {})
                     status.update("[green]执行完成[/green]")
+                    if self.verbose_mode:
+                        result_preview = str(result)[:80] if result else "完成"
+                        reasoning_lines.append(f"[{color}]{icon} 结果: {result_preview}[/{color}]")
+                        console.print(reasoning_lines[-1])
+
                 elif event_name == "output":
                     content = payload.get("reply", "")
                     status.update("[green]生成回复[/green]")
+
                 elif event_name == "error":
-                    content = f"[red]错误: {payload.get('error', '未知错误')}[/red]"
+                    error_msg = payload.get("error", "未知错误")
+                    content = f"[red]错误: {error_msg}[/red]"
+                    status.update(f"[red]出错: {error_msg[:50]}[/red]")
+                    if self.verbose_mode:
+                        reasoning_lines.append(f"[red]{icon} 错误: {error_msg}[red]")
+                        console.print(reasoning_lines[-1])
+
+                elif event_name == "sense":
+                    if self.verbose_mode:
+                        reasoning_lines.append(f"[{color}]{icon} 感知环境[/{color}]")
+                        console.print(reasoning_lines[-1])
 
         # 显示最终回复
         if content:
             # 提取 think 块
             main, think = self.parse_think_block(content)
-
             if think:
-                console.print(f"\n[dim]💭 思考过程: {think[:100]}...[/dim]")
+                think_text = think
+
+            if self.verbose_mode:
+                console.print("[dim]━━ 回复 ━━[/dim]")
+
+            # think 块显示控制
+            if think_text and self.show_think:
+                console.print(Panel(
+                    Markdown(think_text),
+                    title="[dim]💭 思考过程[/dim]",
+                    border_style="dim",
+                ))
 
             console.print(Markdown(main))
 
-            # 保存到消息列表（简化版）
-            self.messages.append(Message(role="user", content=message))
+            # 保存到消息列表
             self.messages.append(Message(role="assistant", content=content, events=events))
 
         # 刷新会话列表（标题可能更新）
