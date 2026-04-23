@@ -407,12 +407,16 @@ class DevOpsTUI:
                         marker = "▶" if s.get("session_id") == self.current_session_id else " "
                         console.print(f"  {marker} [{i}] {title} ({sid}...)")
 
-                # 显示最近消息摘要
+                # 显示最近消息摘要（assistant 消息去掉 think 块）
                 if self.messages:
                     console.print("\n[bold bright_blue]最近消息:[/bold bright_blue]")
                     for msg in self.messages[-3:]:
                         role = "你" if msg.role == "user" else "Agent"
-                        content = msg.content[:60].replace("\n", " ")
+                        if msg.role == "assistant":
+                            main, _ = self.parse_think_block(msg.content)
+                            content = main[:60].replace("\n", " ") if main else ""
+                        else:
+                            content = msg.content[:60].replace("\n", " ")
                         console.print(f"  [dim]{role}:[/dim] {content}...")
 
                 # 获取输入
