@@ -148,6 +148,23 @@ CREATE TABLE IF NOT EXISTS reasoning_chains (
 );
 CREATE INDEX IF NOT EXISTS idx_reasoning_session ON reasoning_chains(session_id, round_number);
 CREATE INDEX IF NOT EXISTS idx_reasoning_stage ON reasoning_chains(stage);
+
+-- ========================================
+--  8. 动态工具表（用户运行时注册自定义 MCP 工具）
+-- ========================================
+CREATE TABLE IF NOT EXISTS dynamic_tools (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT UNIQUE NOT NULL,         -- 工具标识符（LLM function name）
+    description TEXT NOT NULL,                -- 工具描述（给 LLM 看）
+    tool_type   TEXT NOT NULL,                -- shell | http | mcp_stdio | mcp_sse
+    config      TEXT NOT NULL DEFAULT '{}',   -- JSON 配置（根据 type 不同结构）
+    schema_json TEXT NOT NULL DEFAULT '{}',   -- OpenAI function schema JSON
+    is_active   INTEGER NOT NULL DEFAULT 1,   -- 是否启用（0=禁用，1=启用）
+    created_by  TEXT DEFAULT 'system',        -- 创建者标识
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_dynamic_tools_active ON dynamic_tools(is_active);
 """
 
 

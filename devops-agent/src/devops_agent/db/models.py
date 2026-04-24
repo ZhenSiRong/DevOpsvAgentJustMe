@@ -201,6 +201,51 @@ class Memory:
         }
 
 
+@dataclass
+class DynamicTool:
+    id: int
+    name: str
+    description: str
+    tool_type: str  # shell | http | mcp_stdio | mcp_sse
+    config: dict = field(default_factory=dict)
+    schema_json: dict = field(default_factory=dict)
+    is_active: bool = True
+    created_by: str = "system"
+    created_at: str = ""
+    updated_at: str = ""
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> "DynamicTool":
+        config_raw = _row_get(row, "config", "{}")
+        schema_raw = _row_get(row, "schema_json", "{}")
+        return cls(
+            id=_row_get(row, "id", 0),
+            name=row["name"],
+            description=_row_get(row, "description", ""),
+            tool_type=row["tool_type"],
+            config=json.loads(config_raw) if config_raw else {},
+            schema_json=json.loads(schema_raw) if schema_raw else {},
+            is_active=bool(_row_get(row, "is_active", 1)),
+            created_by=_row_get(row, "created_by", "system"),
+            created_at=_row_get(row, "created_at", ""),
+            updated_at=_row_get(row, "updated_at", ""),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "tool_type": self.tool_type,
+            "config": self.config,
+            "schema": self.schema_json,
+            "is_active": self.is_active,
+            "created_by": self.created_by,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+
 __all__ = [
     "Session",
     "Message",
@@ -208,4 +253,5 @@ __all__ = [
     "Config",
     "ConversationState",
     "Memory",
+    "DynamicTool",
 ]

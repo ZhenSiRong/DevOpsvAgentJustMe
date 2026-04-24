@@ -27,6 +27,15 @@ async def lifespan(app: FastAPI):
     # 初始化数据库（建表）
     await db_manager.init_tables()
 
+    # 从数据库加载动态工具到 Registry
+    from .tools import get_registry
+    registry = get_registry()
+    try:
+        loaded = await registry.load_dynamic_tools()
+        logger.info("✅ 动态工具加载完成: %d 个", loaded)
+    except Exception as e:
+        logger.warning("动态工具加载失败(非阻塞): %s", e)
+
     elapsed = time.perf_counter() - start
     logger.info("✅ DevOps Agent 启动完成 (%.2fs)", elapsed)
 
@@ -72,9 +81,9 @@ def create_app() -> FastAPI:
         )
 
     # ============================================================
-    #  注册路由模块（Day 4 完成 — 7 个路由端点）
+    #  注册路由模块（Day 4 完成 — 8 个路由端点 + Day 5 动态工具）
     # ============================================================
-    from .api.routes import health, probe, execute, chat, sessions, audit, reasoning, safety
+    from .api.routes import health, probe, execute, chat, sessions, audit, reasoning, safety, tools
 
     app.include_router(health.router)          # /health, /api/v1/info
     app.include_router(probe.router)            # /api/v1/probe/*
@@ -84,6 +93,7 @@ def create_app() -> FastAPI:
     app.include_router(audit.router)            # /api/v1/audit/*
     app.include_router(reasoning.router)        # /api/v1/reasoning/*
     app.include_router(safety.router)           # /api/v1/safety/*
+    app.include_router(tools.router)            # /api/v1/tools/* (动态工具)
 
     # 挂载前端静态文件（如果存在）
     import os

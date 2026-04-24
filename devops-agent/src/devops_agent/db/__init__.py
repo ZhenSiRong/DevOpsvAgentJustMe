@@ -43,11 +43,20 @@ from .memory_repo import (
     delete_memory,
     get_memory_stats,
 )
+from .dynamic_tools import (
+    create_dynamic_tool,
+    get_dynamic_tool_by_id,
+    get_dynamic_tool_by_name,
+    list_dynamic_tools,
+    update_dynamic_tool,
+    delete_dynamic_tool,
+    toggle_dynamic_tool,
+)
 
 __all__ = [
     # 基础设施
     "db_manager", "get_db", "DatabaseManager",
-    "Session", "Message", "AuditLog", "Config", "ConversationState", "Memory",
+    "Session", "Message", "AuditLog", "Config", "ConversationState", "Memory", "DynamicTool",
     # Sessions Repository
     "create_session", "get_session", "update_session_title",
     "list_sessions", "delete_session", "touch_session",
@@ -65,4 +74,7 @@ __all__ = [
     # Memory Repository
     "add_memory", "get_memory", "query_memories",
     "increment_access_count", "delete_memory", "get_memory_stats",
+    # Dynamic Tools Repository
+    "create_dynamic_tool", "get_dynamic_tool_by_id", "get_dynamic_tool_by_name",
+    "list_dynamic_tools", "update_dynamic_tool", "delete_dynamic_tool", "toggle_dynamic_tool",
 ]
