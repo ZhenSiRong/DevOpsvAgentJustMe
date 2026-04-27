@@ -1,0 +1,80 @@
+# 09 设计文档汇总
+
+> 设计决策索引与版本历史
+
+---
+
+## 设计必要性评估
+
+```mermaid
+mindmap
+  root((设计必要性))
+    必须有
+      业务目标☑️
+      功能清单☑️
+      核心流程☑️
+      数据模型☑️
+      接口契约☑️
+      技术选型☑️
+      架构图☑️
+    有方向就行
+      性能指标
+      用户画像
+      可扩展性
+      视情况定
+      内部工具简化
+      用户产品详细
+      金融医疗完整
+      PoC能跑就行
+    可以后补
+      异常处理
+      边界条件
+      监控告警
+      日志规范
+      备份容灾
+```
+
+---
+
+## 规划文档索引
+
+| 序号 | 文档 | 状态 | 最后更新 |
+|------|------|------|---------|
+| 01 | [业务目标](01-business-goals.md) | ✅ 完成 | 2026-04-27 |
+| 02 | [功能清单](02-functional-requirements.md) | ✅ 完成 | 2026-04-27 |
+| 03 | [核心流程](03-core-workflow.mmd) | ✅ 完成 | 2026-04-27 |
+| 04 | [数据模型](04-data-model.md) | ✅ 完成 | 2026-04-27 |
+| 05 | [接口契约](05-api-contract.md) | ✅ 完成 | 2026-04-27 |
+| 06 | [技术栈选型](06-tech-stack.md) | ✅ 完成 | 2026-04-27 |
+| 07 | [架构设计](07-architecture.mmd) | ✅ 完成 | 2026-04-27 |
+| 08 | [开发规范](08-development-guide.md) | ✅ 完成 | 2026-04-27 |
+| 09 | [设计文档汇总](09-design-summary.mmd) | ✅ 完成 | 2026-04-27 |
+
+---
+
+## 工程文档索引
+
+| 文档 | 说明 | 路径 |
+|------|------|------|
+| 快速开始 | 安装、配置、启动后端 | [devops-agent/README.md](../devops-agent/README.md) |
+| TUI 使用指南 | 终端交互客户端命令与快捷键 | [devops-agent/docs/tui-usage-guide.md](../devops-agent/docs/tui-usage-guide.md) |
+| 后端功能缺口分析 | 已实现 vs 待实现功能对照 | [devops-agent/docs/backend-gap-analysis.md](../devops-agent/docs/backend-gap-analysis.md) |
+| SELinux 策略设计 | 安全策略模块设计 | [devops-agent/docs/selinux-policy-design.md](../devops-agent/docs/selinux-policy-design.md) |
+| 架构决策记录 | 关键技术决策记录 | [devops-agent/docs/architecture-decisions.md](../devops-agent/docs/architecture-decisions.md) |
+
+---
+
+## 版本历史
+
+| 日期 | 变更 | 作者 |
+|------|------|------|
+| 2026-04-27 | 文档集重构：从散乱目录整合为 `docs-planning/` 统一规划层 | A |
+| 2026-04-27 | 新增 LLM 协议自动探测机制（`/config auto`）| A |
+| 2026-04-27 | TUI 渲染 Bug 修复（双渲染问题）| A |
+| 2026-04-23 | LLM 模型动态切换功能上线 | A |
+| 2026-04-22 | MCP 工具插件化框架完成（10 工具）| A |
+| 2026-04-22 | 审计日志落库 + Agent 记忆管理 | A |
+
+---
+
+*本文档由团队维护 | 中国软件杯 A2 赛题*

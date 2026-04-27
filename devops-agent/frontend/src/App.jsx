@@ -5,6 +5,7 @@ import ProbePage from './pages/ProbePage'
 import AuditPage from './pages/AuditPage'
 import SafetyPage from './pages/SafetyPage'
 import ReasoningPage from './pages/ReasoningPage'
+import SettingsPage from './pages/SettingsPage'
 
 function App() {
   return (
@@ -15,6 +16,7 @@ function App() {
         <Route path="audit" element={<AuditPage />} />
         <Route path="safety" element={<SafetyPage />} />
         <Route path="reasoning" element={<ReasoningPage />} />
+        <Route path="settings" element={<SettingsPage />} />
       </Route>
     </Routes>
   )

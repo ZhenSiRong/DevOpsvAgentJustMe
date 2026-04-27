@@ -223,6 +223,11 @@ class DevOpsTUI:
                     content.append(Markdown(main))
                     content.append("")
 
+            elif msg.role == "system":
+                content.append(f"[dim]📋 系统[/dim]")
+                content.append(Markdown(msg.content))
+                content.append("")
+
             content.append("")
 
         if not content:
@@ -352,6 +357,11 @@ class DevOpsTUI:
   /down              - 查看更新消息（下翻页）
   /verbose           - 切换详细模式（显示推理细节）
   /think             - 切换 think 块显示
+  /config            - 查看 LLM 配置
+  /config set K V    - 修改配置（如: /config set llm.model MiniMax-Text-01）
+  /config reset K    - 重置某项为默认值
+  /config reset-all  - 重置所有配置为默认值
+  /config auto U K M - 自动探测协议并切换（U=url K=key M=model）
 
 [bold]快捷键:[/bold]
   Ctrl+C    - 退出
@@ -425,6 +435,10 @@ class DevOpsTUI:
             self.status_text = f"显示 think: {'开启' if self.show_think else '关闭'}"
             return False
 
+        if main_cmd == "/config":
+            await self._handle_config_command(parts)
+            return False
+
         self.status_text = f"[yellow]未知命令: {main_cmd}[/yellow]"
         return False
 
@@ -449,6 +463,8 @@ class DevOpsTUI:
         # 主输入循环
         while True:
             try:
+                console.clear()
+
                 # 显示当前状态栏
                 console.print(f"\n[dim]{self.status_text}[/dim]")
 
@@ -489,12 +505,21 @@ class DevOpsTUI:
 
                     for msg in page_msgs:
                         if msg.role == "user":
-                            console.print(f"  [bold bright_green]你:[/bold bright_green] {msg.content[:80]}")
+                            console.print(f"\n[bold bright_green]你:[/bold bright_green] {msg.content}")
                         elif msg.role == "assistant":
                             main, think = self.parse_think_block(msg.content)
-                            preview = main[:80].replace("\n", " ") if main else ""
-                            think_hint = " [dim](含思考过程)[/dim]" if think else ""
-                            console.print(f"  [bold bright_blue]Agent:[/bold bright_blue] {preview}...{think_hint}")
+                            console.print(f"\n[bold bright_blue]Agent:[/bold bright_blue]")
+                            # think 块显示控制
+                            if think and self.show_think:
+                                console.print(Panel(
+                                    Markdown(think),
+                                    title="[dim]💭 思考过程[/dim]",
+                                    border_style="dim",
+                                ))
+                            console.print(Markdown(main))
+                        elif msg.role == "system":
+                            console.print(f"\n[dim]📋 系统[/dim]")
+                            console.print(Markdown(msg.content))
 
                     if total > self.msg_page_size:
                         nav_hint = []
@@ -579,6 +604,123 @@ class DevOpsTUI:
 
         await self.client.close()
 
+    async def _handle_config_command(self, parts: list[str]) -> None:
+        """处理 /config 命令"""
+        if len(parts) == 1:
+            # 显示当前配置（作为 system 消息保留在聊天区）
+            try:
+                result = await self.client.get_llm_config()
+                items = result.get("items", [])
+
+                # 直接用 console 打印完整表格，然后暂停等待用户确认
+                console.print("\n[bold bright_blue]━━ 当前 LLM 配置 ━━[/bold bright_blue]")
+                table = Table(show_header=True, box=None, padding=(0, 2))
+                table.add_column("配置项", style="cyan", no_wrap=True)
+                table.add_column("当前值", style="bright_white")
+                table.add_column("默认值", style="dim")
+                table.add_column("状态", justify="center")
+
+                for item in items:
+                    key = item.get("key", "")
+                    value = item.get("value", "")
+                    default = item.get("default_value", "")
+                    overridden = item.get("is_overridden", False)
+                    sensitive = item.get("sensitive", False)
+
+                    if sensitive and isinstance(value, str) and len(value) > 8:
+                        value = value[:4] + "..." + value[-4:]
+                        default = default[:4] + "..." + default[-4:] if isinstance(default, str) else default
+
+                    status = "[yellow]已覆盖[/yellow]" if overridden else "[dim]默认[/dim]"
+                    table.add_row(key, str(value), str(default), status)
+
+                console.print(table)
+                console.print(f"\n[dim]当前模型: {result.get('model', '?')} | 温度: {result.get('temperature', '?')}[/dim]")
+                console.print("[dim]修改: /config set <key> <value>  |  重置: /config reset <key>  |  全部重置: /config reset-all[/dim]")
+                console.print("[dim]自动探测: /config auto <base_url> <api_key> <model>[/dim]")
+                console.print("[dim]━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━[/dim]")
+
+                # 暂停等待用户按 Enter，防止内容被 TUI 循环覆盖
+                Prompt.ask("\n[dim]按 Enter 继续[/dim]")
+
+                self.status_text = f"模型: {result.get('model', '?')} | 温度: {result.get('temperature', '?')}"
+            except Exception as e:
+                self.status_text = f"[red]获取配置失败: {e}[/red]"
+            return
+
+        sub_cmd = parts[1].lower() if len(parts) > 1 else ""
+
+        if sub_cmd == "set" and len(parts) >= 4:
+            key = parts[2]
+            value = " ".join(parts[3:])
+            try:
+                result = await self.client.update_config([{"key": key, "value": value}])
+                updated = result.get("updated", [])
+                errors = result.get("errors", [])
+                if updated:
+                    self.status_text = f"[green]已更新: {', '.join(updated)}[/green]"
+                if errors:
+                    self.status_text = f"[red]失败: {', '.join(errors)}[/red]"
+            except Exception as e:
+                self.status_text = f"[red]更新失败: {e}[/red]"
+            return
+
+        if sub_cmd == "reset" and len(parts) >= 3:
+            key = parts[2]
+            try:
+                await self.client.reset_config(key)
+                self.status_text = f"[green]已重置: {key}[/green]"
+            except Exception as e:
+                self.status_text = f"[red]重置失败: {e}[/red]"
+            return
+
+        if sub_cmd == "reset-all":
+            try:
+                await self.client.reset_all_config()
+                self.status_text = "[green]所有配置已重置为默认值[/green]"
+            except Exception as e:
+                self.status_text = f"[red]重置失败: {e}[/red]"
+            return
+
+        if sub_cmd == "auto" and len(parts) >= 5:
+            # /config auto <base_url> <api_key> <model>
+            base_url = parts[2]
+            api_key = parts[3]
+            model = parts[4]
+            try:
+                console.print(f"\n[dim]正在探测协议: {base_url} ...[/dim]")
+                result = await self.client.detect_llm_config(base_url, api_key, model, apply=True)
+
+                success = result.get("success", False)
+                protocol = result.get("protocol", "")
+                preview = result.get("response_preview", "")[:120]
+                error = result.get("error", "")
+                applied = result.get("applied", False)
+                anthropic_err = result.get("anthropic_error", "")
+                openai_err = result.get("openai_error", "")
+
+                if success:
+                    console.print(f"\n[bold green]✓ 探测成功[/bold green] 协议: [cyan]{protocol}[/cyan]")
+                    console.print(f"[dim]响应预览: {preview}...[/dim]")
+                    if applied:
+                        console.print(f"[green]✓ 配置已自动持久化，下一条对话即时生效[/green]")
+                    self.status_text = f"[green]协议: {protocol} | 模型: {model}[/green]"
+                else:
+                    console.print(f"\n[bold red]✗ 探测失败[/bold red]")
+                    console.print(f"[red]{error}[/red]")
+                    if anthropic_err:
+                        console.print(f"[dim]Anthropic: {anthropic_err}[/dim]")
+                    if openai_err:
+                        console.print(f"[dim]OpenAI: {openai_err}[/dim]")
+                    self.status_text = f"[red]探测失败: {error[:60]}[/red]"
+
+                Prompt.ask("\n[dim]按 Enter 继续[/dim]")
+            except Exception as e:
+                self.status_text = f"[red]探测异常: {e}[/red]"
+            return
+
+        self.status_text = "[yellow]用法: /config | /config set K V | /config reset K | /config reset-all | /config auto <url> <key> <model>[/yellow]"
+
     async def _chat_with_stream(self, message: str) -> None:
         """带流式显示的对话 —— 增强版（支持 verbose 模式和 Live 渲染）"""
         if not self.current_session_id:
@@ -586,10 +728,7 @@ class DevOpsTUI:
             if not sid:
                 return
 
-        # 显示用户消息
-        console.print(f"\n[bold bright_green]你:[/bold bright_green] {message}")
-
-        # 保存用户消息到历史
+        # 保存用户消息到历史（不再直接 console.print，由 run() 循环统一渲染）
         self.messages.append(Message(role="user", content=message))
         self.msg_offset = 0  # 重置翻页到最新
 
@@ -658,27 +797,8 @@ class DevOpsTUI:
                         reasoning_lines.append(f"[{color}]{icon} 感知环境[/{color}]")
                         console.print(reasoning_lines[-1])
 
-        # 显示最终回复
+        # 保存 assistant 回复到消息列表（由 run() 循环统一渲染，不再直接 console.print）
         if content:
-            # 提取 think 块
-            main, think = self.parse_think_block(content)
-            if think:
-                think_text = think
-
-            if self.verbose_mode:
-                console.print("[dim]━━ 回复 ━━[/dim]")
-
-            # think 块显示控制
-            if think_text and self.show_think:
-                console.print(Panel(
-                    Markdown(think_text),
-                    title="[dim]💭 思考过程[/dim]",
-                    border_style="dim",
-                ))
-
-            console.print(Markdown(main))
-
-            # 保存到消息列表
             self.messages.append(Message(role="assistant", content=content, events=events))
 
         # 刷新会话列表（标题可能更新）

@@ -1,0 +1,100 @@
+# 07 架构设计
+
+> 系统分层、组件关系与部署视图
+
+---
+
+## 系统分层架构
+
+```mermaid
+graph TB
+    subgraph 表现层
+        Browser["浏览器<br/>Vue 3 + Vite"]
+        TUI["TUI 终端<br/>Rich + Python"]
+    end
+
+    subgraph 业务逻辑层
+        FastAPI["FastAPI 网关"]
+        Agent["Agent 运行时<br/>nanoclaw-py 改造"]
+        Safety["安全层<br/>校验器 + 执行引擎"]
+        Probe["探针模块<br/>disk / process / network / logs"]
+        MCP["MCP 工具注册中心<br/>@tool() 装饰器"]
+    end
+
+    subgraph 数据层
+        SQLite["SQLite<br/>sessions / messages / audit_logs"]
+        FS["Linux 文件系统"]
+    end
+
+    subgraph 外部服务
+        LLM["LLM 服务<br/>OpenAI / Anthropic 双协议"]
+    end
+
+    Browser -->|HTTP / WebSocket| FastAPI
+    TUI -->|HTTP / SSE| FastAPI
+    FastAPI --> Agent
+    Agent --> Safety
+    Agent --> Probe
+    Agent --> MCP
+    Safety -->|subprocess| FS
+    Probe -->|subprocess| FS
+    MCP -->|subprocess| FS
+    Agent -->|httpx| LLM
+    FastAPI -->|aiosqlite| SQLite
+    Agent -->|aiosqlite| SQLite
+```
+
+---
+
+## 组件关系
+
+| 组件 | 职责 | 技术 |
+|------|------|------|
+| **前端（浏览器）** | 对话交互、推理链路展示、会话管理 | Vue 3 + Vite + Tailwind |
+| **TUI 终端** | 命令行交互客户端 | Rich + Python asyncio |
+| **FastAPI 网关** | 路由、认证、流式响应、Swagger 文档 | FastAPI + Uvicorn |
+| **Agent 运行时** | 消息组装、tool use 循环、上下文管理 | nanoclaw-py 改造 |
+| **安全层** | 路径保护、权限校验、命令白名单 | 自研 Python 模块 |
+| **探针模块** | OS 环境感知（磁盘/进程/网络/日志） | subprocess + 解析器 |
+| **MCP 注册中心** | 工具注册、发现、执行 | @tool() + ToolRegistry |
+| **SQLite** | 会话、消息、审计日志持久化 | aiosqlite |
+
+---
+
+## 部署视图
+
+```
+┌─────────────────────────────────────────┐
+│  龙芯 loongarch64 + 麒麟 V11            │
+│                                         │
+│  ┌─────────────┐  ┌─────────────────┐  │
+│  │  Nginx      │  │  Python 3.12    │  │
+│  │  (反向代理)  │→ │  FastAPI +      │  │
+│  │             │  │  Agent 运行时    │  │
+│  └─────────────┘  └─────────────────┘  │
+│         ↓                    ↓          │
+│  ┌─────────────┐  ┌─────────────────┐  │
+│  │  静态文件    │  │  SQLite         │  │
+│  │  (前端构建)  │  │  (单文件)       │  │
+│  └─────────────┘  └─────────────────┘  │
+│                                         │
+│  SELinux: Enforcing                     │
+│  运行账户: devops-runner (非 root)       │
+└─────────────────────────────────────────┘
+```
+
+---
+
+## 关键架构决策
+
+| 决策 | 选择 | 理由 |
+|------|------|------|
+| 基座项目 | nanoclaw-py | 533 行 Python，轻量可改造，保留 agent/config/db/scheduler/memory 模块 |
+| 双协议 LLM 接入 | OpenAI + Anthropic | 兼容国内主流 LLM 服务（DeepSeek、Qwen、MiniMax） |
+| 存储方案 | SQLite | 单机部署、无高并发，够用且轻量 |
+| 权限隔离 | devops-runner 账户 + sudo 白名单 | 最小权限原则，非必要不使用 root |
+| 流式响应 | SSE (Server-Sent Events) | 比 WebSocket 轻量，适合单向推送推理链路事件 |
+
+---
+
+*架构图源文件: [DevOpsAgent架构.eddx](../assets/DevOpsAgent架构.eddx)*

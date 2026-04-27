@@ -8,6 +8,7 @@ import {
   Server,
   Menu,
   X,
+  Settings,
 } from 'lucide-react'
 import { useState } from 'react'
 
@@ -17,6 +18,7 @@ const navItems = [
   { path: '/safety', label: '安全中心', icon: Shield },
   { path: '/audit', label: '审计日志', icon: ClipboardList },
   { path: '/reasoning', label: '推理链路', icon: GitBranch },
+  { path: '/settings', label: '系统设置', icon: Settings },
 ]
 
 export default function Layout() {

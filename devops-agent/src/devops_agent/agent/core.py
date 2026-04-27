@@ -31,7 +31,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from ..config import get_settings
+from ..config import get_settings, get_llm_runtime_config, LLMRuntimeConfig
 from ..db import (
     create_session,
     get_session,
@@ -212,7 +212,7 @@ async def run_agent(
     Returns:
         (reply_text, agent_context): 最终回复文本和运行时上下文
     """
-    settings = get_settings()
+    llm_cfg = await get_llm_runtime_config()
 
     # ---- 初始化上下文 ----
     sid = session_id or f"sess_{int(time.time() * 1000)}"
@@ -284,19 +284,35 @@ async def run_agent(
     tools_defs = get_tool_definitions()
 
     while ctx.tool_round < MAX_TOOL_ROUNDS:
+        # 根据 protocol 切换主/备参数
+        if llm_cfg.protocol == "anthropic":
+            base_url = llm_cfg.anthropic_base_url
+            api_key = llm_cfg.anthropic_api_key
+            model = llm_cfg.anthropic_model
+            fallback_base_url = llm_cfg.base_url
+            fallback_api_key = llm_cfg.api_key
+            fallback_model = llm_cfg.model
+        else:
+            base_url = llm_cfg.base_url
+            api_key = llm_cfg.api_key
+            model = llm_cfg.model
+            fallback_base_url = llm_cfg.anthropic_base_url
+            fallback_api_key = llm_cfg.anthropic_api_key
+            fallback_model = llm_cfg.anthropic_model
+
         # 调用 LLM
         response: LLMResponse = await call_llm(
             messages=messages,
-            protocol=LLMProtocol(settings.llm_protocol),
+            protocol=LLMProtocol(llm_cfg.protocol),
             tools=tools_defs,
-            base_url=settings.llm_base_url,
-            api_key=settings.llm_api_key,
-            model=settings.llm_model,
-            temperature=settings.llm_temperature,
-            max_tokens=settings.llm_max_tokens,
-            fallback_base_url=settings.anthropic_base_url,
-            fallback_api_key=settings.anthropic_api_key,
-            fallback_model=settings.anthropic_model,
+            base_url=base_url,
+            api_key=api_key,
+            model=model,
+            temperature=llm_cfg.temperature,
+            max_tokens=llm_cfg.max_tokens,
+            fallback_base_url=fallback_base_url,
+            fallback_api_key=fallback_api_key,
+            fallback_model=fallback_model,
         )
 
         # 记录 token 用量
@@ -467,7 +483,7 @@ async def run_agent_stream(
         {"event": "done", "session_id": "..."}
     """
     import json as _json
-    settings = get_settings()
+    llm_cfg = await get_llm_runtime_config()
     sid = session_id or f"sess_{int(time.time() * 1000)}"
     ctx = AgentContext(session_id=sid)
 
@@ -536,19 +552,35 @@ async def run_agent_stream(
     tools_defs = get_tool_definitions()
 
     while ctx.tool_round < MAX_TOOL_ROUNDS:
+        # 根据 protocol 切换主/备参数
+        if llm_cfg.protocol == "anthropic":
+            base_url = llm_cfg.anthropic_base_url
+            api_key = llm_cfg.anthropic_api_key
+            model = llm_cfg.anthropic_model
+            fallback_base_url = llm_cfg.base_url
+            fallback_api_key = llm_cfg.api_key
+            fallback_model = llm_cfg.model
+        else:
+            base_url = llm_cfg.base_url
+            api_key = llm_cfg.api_key
+            model = llm_cfg.model
+            fallback_base_url = llm_cfg.anthropic_base_url
+            fallback_api_key = llm_cfg.anthropic_api_key
+            fallback_model = llm_cfg.anthropic_model
+
         # 调用 LLM
         response: LLMResponse = await call_llm(
             messages=messages,
-            protocol=LLMProtocol(settings.llm_protocol),
+            protocol=LLMProtocol(llm_cfg.protocol),
             tools=tools_defs,
-            base_url=settings.llm_base_url,
-            api_key=settings.llm_api_key,
-            model=settings.llm_model,
-            temperature=settings.llm_temperature,
-            max_tokens=settings.llm_max_tokens,
-            fallback_base_url=settings.anthropic_base_url,
-            fallback_api_key=settings.anthropic_api_key,
-            fallback_model=settings.anthropic_model,
+            base_url=base_url,
+            api_key=api_key,
+            model=model,
+            temperature=llm_cfg.temperature,
+            max_tokens=llm_cfg.max_tokens,
+            fallback_base_url=fallback_base_url,
+            fallback_api_key=fallback_api_key,
+            fallback_model=fallback_model,
         )
 
         ctx.total_llm_tokens += sum(response.usage.values())

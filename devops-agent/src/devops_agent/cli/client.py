@@ -199,5 +199,46 @@ class DevOpsClient:
         r.raise_for_status()
         return r.json()
 
+    # ============================================================
+    #  系统配置（LLM 动态切换）
+    # ============================================================
+
+    async def get_llm_config(self) -> dict[str, Any]:
+        r = await self.client.get(f"{self.base_url}{API_BASE}/config/llm")
+        r.raise_for_status()
+        return r.json()
+
+    async def update_config(self, configs: list[dict[str, str]]) -> dict[str, Any]:
+        r = await self.client.put(
+            f"{self.base_url}{API_BASE}/config",
+            json={"configs": configs},
+        )
+        r.raise_for_status()
+        return r.json()
+
+    async def reset_config(self, key: str) -> None:
+        r = await self.client.delete(f"{self.base_url}{API_BASE}/config/{key}")
+        if r.status_code != 204:
+            r.raise_for_status()
+
+    async def reset_all_config(self) -> dict[str, Any]:
+        r = await self.client.post(f"{self.base_url}{API_BASE}/config/reset-all")
+        r.raise_for_status()
+        return r.json()
+
+    async def detect_llm_config(
+        self,
+        base_url: str,
+        api_key: str,
+        model: str,
+        apply: bool = True,
+    ) -> dict[str, Any]:
+        r = await self.client.post(
+            f"{self.base_url}{API_BASE}/config/detect",
+            json={"base_url": base_url, "api_key": api_key, "model": model, "apply": apply},
+        )
+        r.raise_for_status()
+        return r.json()
+
     async def close(self) -> None:
         await self.client.aclose()

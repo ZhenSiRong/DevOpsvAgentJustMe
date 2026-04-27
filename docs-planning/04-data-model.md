@@ -1,4 +1,6 @@
-基于接口契约 + 数据访问层设计，Pydantic 模型定义如下：
+# 04 数据模型
+
+> 基于接口契约 + 数据访问层设计，Pydantic 模型与 ORM 定义
 
 ---
 
@@ -235,7 +237,3 @@ ConversationState (按 session_id 一对一)
 **`tool_calls` 用 JSON 存储。** 因为不同工具的参数结构差异很大，不适合拆成独立表。查询时用 `json_extract()` 就行。
 
 **`AuditLog.message_id` 可为空。** 探针调用和安全校验可能发生在消息正式生成之前（Agent 内部循环），此时还没有 message_id。
-
----
-
-要不要我把这些模型和之前的接口契约合并成一份完整的 **OpenAPI 3.0 YAML 文件**？可以直接给队友做前后端联调的依据。

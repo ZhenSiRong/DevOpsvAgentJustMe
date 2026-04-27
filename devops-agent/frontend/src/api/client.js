@@ -238,3 +238,22 @@ export const injectionScan = (text) =>
   })
 
 export const injectionStats = () => request(`${API_BASE}/safety/injection/stats`)
+
+// ============================================================
+//  系统配置（LLM 动态切换）
+// ============================================================
+export const getLLMConfig = () => request(`${API_BASE}/config/llm`)
+
+export const getAllConfig = () => request(`${API_BASE}/config`)
+
+export const updateConfig = (configs) =>
+  request(`${API_BASE}/config`, {
+    method: 'PUT',
+    body: JSON.stringify({ configs }),
+  })
+
+export const resetConfig = (key) =>
+  request(`${API_BASE}/config/${encodeURIComponent(key)}`, { method: 'DELETE' })
+
+export const resetAllLLMConfig = () =>
+  request(`${API_BASE}/config/reset-all`, { method: 'POST' })
