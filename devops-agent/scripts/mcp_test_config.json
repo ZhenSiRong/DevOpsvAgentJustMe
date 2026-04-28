@@ -1,0 +1,7 @@
+{
+  "id": "test",
+  "name": "Test MCP Server",
+  "transport": "stdio",
+  "command": "python3",
+  "args": ["/root/devops-agent/scripts/test_mcp_server.py"]
+}
