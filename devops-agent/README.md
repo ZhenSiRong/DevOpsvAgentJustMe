@@ -84,11 +84,17 @@ devops-agent/
 │   └── create_user.py    # 创建管理员账户
 │
 └── docs/                 # 文档
-    ├── api_reference.md  # API 对接文档（给前端队友）
-    └── architecture.md   # 架构设计文档
+    ├── README.md              # 文档索引
+    ├── deployment-guide.md    # 完整部署与使用指南（生产环境必读）
+    ├── architecture-decisions.md  # 架构决策记录
+    ├── selinux-policy-design.md   # SELinux 策略设计
+    ├── backend-gap-analysis.md    # 后端功能缺口分析
+    └── tui-usage-guide.md         # TUI 终端客户端指南
 ```
 
-## 快速开始
+> **首次部署？** 生产环境完整部署流程请阅读 [`docs/deployment-guide.md`](docs/deployment-guide.md)，包含系统要求、麒麟V11环境准备、systemd服务化、配置详解和故障排查。
+
+## 快速开始（开发环境）
 
 ```bash
 # 1. 创建虚拟环境

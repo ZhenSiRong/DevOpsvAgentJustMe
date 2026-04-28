@@ -1,8 +1,11 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Send, Loader2, Bot, User, Sparkles, Terminal, AlertTriangle, MessageSquare, ChevronDown, ChevronRight } from 'lucide-react'
+import { Send, Loader2, Bot, User, Sparkles, Terminal, AlertTriangle, MessageSquare, ChevronDown, ChevronRight, PanelRightOpen, PanelRightClose, PanelLeftOpen, PanelLeftClose } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { streamChatFetch, sendChat, listSessions, getSession, deleteSession } from '../api/client'
+import TerminalPanel from '../components/TerminalPanel'
+import QuickCommandBar from '../components/QuickCommandBar'
+import { PanelGroup, Panel, PanelResizeHandle } from 'react-resizable-panels'
 
 const EVENT_LABELS = {
   start: '开始处理',
@@ -38,6 +41,21 @@ export default function ChatPage() {
   const [activeEvent, setActiveEvent] = useState(null)
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
+  const terminalRef = useRef(null)
+  const chatPanelRef = useRef(null)
+  const terminalPanelRef = useRef(null)
+  const [terminalOpen, setTerminalOpen] = useState(false)
+  const [sessionPanelOpen, setSessionPanelOpen] = useState(true)
+  const [chatPanelOpen, setChatPanelOpen] = useState(true)
+
+  // 快捷命令发送到终端
+  const handleRunQuickCommand = useCallback((cmd) => {
+    terminalPanelRef.current?.expand()
+    // 延迟执行，等面板展开后终端 ready
+    setTimeout(() => {
+      terminalRef.current?.runCommand(cmd)
+    }, 150)
+  }, [])
 
   // 加载会话列表
   useEffect(() => {
@@ -254,14 +272,32 @@ export default function ChatPage() {
   return (
     <div className="flex h-[calc(100vh-3.5rem)] lg:h-screen">
       {/* 会话侧边栏 */}
-      <div className="hidden md:flex w-64 flex-col border-r border-slate-800 bg-slate-900/50">
-        <div className="p-3 border-b border-slate-800">
+      <div
+        className={`hidden md:flex flex-col border-r border-slate-800 bg-slate-900/50 transition-all duration-200 overflow-hidden ${
+          sessionPanelOpen ? 'w-64' : 'w-0'
+        }`}
+      >
+        {/* 顶部工具栏 */}
+        <div className={`flex items-center justify-between border-b border-slate-800 shrink-0 ${sessionPanelOpen ? 'p-3' : 'px-0 py-3'}`}>
+          {sessionPanelOpen && (
+            <button
+              onClick={handleNewChat}
+              className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-500 rounded-lg text-sm font-medium transition-colors"
+            >
+              <Sparkles className="w-4 h-4" />
+              新对话
+            </button>
+          )}
           <button
-            onClick={handleNewChat}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-500 rounded-lg text-sm font-medium transition-colors"
+            onClick={() => setSessionPanelOpen(v => !v)}
+            className={`text-slate-400 hover:text-slate-200 transition-colors ${sessionPanelOpen ? 'ml-2' : 'w-full flex justify-center'}`}
+            title={sessionPanelOpen ? '收起会话列表' : '展开会话列表'}
           >
-            <Sparkles className="w-4 h-4" />
-            新对话
+            {sessionPanelOpen ? (
+              <PanelLeftClose className="w-4 h-4" />
+            ) : (
+              <PanelLeftOpen className="w-4 h-4" />
+            )}
           </button>
         </div>
         <div className="flex-1 overflow-y-auto p-2 space-y-1 scrollbar-thin">
@@ -296,23 +332,64 @@ export default function ChatPage() {
         </div>
       </div>
 
-      {/* 聊天主区域 */}
-      <div className="flex-1 flex flex-col min-w-0">
-        {/* Session ID 标签栏 */}
-        <div className="shrink-0 px-4 py-1.5 bg-slate-900/80 border-b border-slate-800 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-xs">
-            <span className="text-slate-500">会话ID:</span>
-            <span className="font-mono text-slate-300 bg-slate-800 px-2 py-0.5 rounded">
-              {currentSessionId || '新对话'}
-            </span>
-          </div>
-          {isStreaming && (
-            <div className="flex items-center gap-1.5 text-xs text-primary-400">
-              <Loader2 className="w-3 h-3 animate-spin" />
-              <span>{EVENT_LABELS[activeEvent] || '处理中...'}</span>
+      {/* 聊天主区域 + 终端侧板 — 可拖拽面板组 */}
+      <PanelGroup direction="horizontal" className="flex-1">
+        <Panel
+          ref={chatPanelRef}
+          collapsible
+          collapsedSize={0}
+          minSize={30}
+          defaultSize={65}
+          onCollapse={() => setChatPanelOpen(false)}
+          onExpand={() => setChatPanelOpen(true)}
+          className="flex flex-col"
+        >
+          {/* Session ID 标签栏 */}
+          <div className="shrink-0 px-4 py-1.5 bg-slate-900/80 border-b border-slate-800 flex items-center justify-between">
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-slate-500">会话ID:</span>
+              <span className="font-mono text-slate-300 bg-slate-800 px-2 py-0.5 rounded">
+                {currentSessionId || '新对话'}
+              </span>
             </div>
-          )}
-        </div>
+            <div className="flex items-center gap-3">
+              {isStreaming && (
+                <div className="flex items-center gap-1.5 text-xs text-primary-400">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  <span>{EVENT_LABELS[activeEvent] || '处理中...'}</span>
+                </div>
+              )}
+              <button
+                onClick={() => chatPanelRef.current?.collapse()}
+                className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors"
+                title="收起聊天"
+              >
+                <PanelLeftClose className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">收起</span>
+              </button>
+              <button
+                onClick={() => terminalOpen ? terminalPanelRef.current?.collapse() : terminalPanelRef.current?.expand()}
+                className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-medium transition-colors ${
+                  terminalOpen
+                    ? 'bg-primary-900/30 text-primary-300 border border-primary-800/50'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                }`}
+                title={terminalOpen ? '关闭终端' : '打开终端'}
+              >
+                {terminalOpen ? (
+                  <>
+                    <PanelRightClose className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">关闭终端</span>
+                  </>
+                ) : (
+                  <>
+                    <PanelRightOpen className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">终端</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
 
         {/* 消息列表 */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-thin">
@@ -508,7 +585,26 @@ export default function ChatPage() {
             </span>
           </div>
         </div>
-      </div>
-    </div>
+      </Panel>
+
+      <PanelResizeHandle className="w-1 bg-slate-800 hover:bg-primary-500 data-[resize-handle-active]:bg-primary-500 cursor-col-resize" />
+
+      <Panel
+        ref={terminalPanelRef}
+        collapsible
+        collapsedSize={0}
+        minSize={20}
+        defaultSize={35}
+        onCollapse={() => setTerminalOpen(false)}
+        onExpand={() => setTerminalOpen(true)}
+        className="flex flex-col"
+      >
+        <div className="flex-1 min-h-0">
+          <TerminalPanel ref={terminalRef} visible={terminalOpen} chatCollapsed={!chatPanelOpen} onExpandChat={() => chatPanelRef.current?.expand()} />
+        </div>
+        <QuickCommandBar onRunCommand={handleRunQuickCommand} />
+      </Panel>
+    </PanelGroup>
+  </div>
   )
 }

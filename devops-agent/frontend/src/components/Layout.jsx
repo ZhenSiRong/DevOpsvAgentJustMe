@@ -9,6 +9,8 @@ import {
   Menu,
   X,
   Settings,
+  PanelLeftOpen,
+  PanelLeftClose,
 } from 'lucide-react'
 import { useState } from 'react'
 
@@ -23,6 +25,7 @@ const navItems = [
 
 export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [navCollapsed, setNavCollapsed] = useState(false)
   const location = useLocation()
 
   return (
@@ -38,24 +41,31 @@ export default function Layout() {
       {/* Sidebar */}
       <aside
         className={`
-          fixed lg:static inset-y-0 left-0 z-50 w-64 bg-slate-900 border-r border-slate-800
-          transform transition-transform duration-200 lg:transform-none
+          fixed lg:static inset-y-0 left-0 z-50 bg-slate-900 border-r border-slate-800
+          transform transition-all duration-200 lg:transform-none
           ${sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
+          ${navCollapsed ? 'w-16' : 'w-64'}
           flex flex-col
         `}
       >
-        <div className="flex items-center gap-3 px-4 h-14 border-b border-slate-800">
-          <Server className="w-6 h-6 text-primary-400" />
-          <span className="font-semibold text-lg">DevOps Agent</span>
+        {/* Logo 区域 */}
+        <div className="flex items-center h-14 border-b border-slate-800 shrink-0">
+          <div className={`flex items-center gap-3 ${navCollapsed ? 'justify-center w-full px-0' : 'px-4'}`}>
+            <Server className="w-6 h-6 text-primary-400 shrink-0" />
+            {!navCollapsed && (
+              <span className="font-semibold text-lg whitespace-nowrap overflow-hidden">DevOps Agent</span>
+            )}
+          </div>
           <button
-            className="lg:hidden ml-auto text-slate-400 hover:text-white"
+            className="lg:hidden ml-auto mr-3 text-slate-400 hover:text-white"
             onClick={() => setSidebarOpen(false)}
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        <nav className="flex-1 px-3 py-4 space-y-1">
+        {/* 导航菜单 */}
+        <nav className="flex-1 px-3 py-4 space-y-1 overflow-hidden">
           {navItems.map((item) => {
             const Icon = item.icon
             const isActive = location.pathname === item.path
@@ -64,27 +74,51 @@ export default function Layout() {
                 key={item.path}
                 to={item.path}
                 onClick={() => setSidebarOpen(false)}
+                title={item.label}
                 className={`
-                  flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors
+                  flex items-center rounded-lg text-sm font-medium transition-colors
+                  ${navCollapsed ? 'justify-center px-2 py-2.5' : 'gap-3 px-3 py-2.5'}
                   ${isActive
                     ? 'bg-primary-900/30 text-primary-300 border border-primary-800/50'
                     : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800/50'
                   }
                 `}
               >
-                <Icon className="w-5 h-5" />
-                {item.label}
+                <Icon className="w-5 h-5 shrink-0" />
+                {!navCollapsed && <span className="whitespace-nowrap overflow-hidden">{item.label}</span>}
               </NavLink>
             )
           })}
         </nav>
 
-        <div className="px-4 py-3 border-t border-slate-800 text-xs text-slate-500">
-          <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-emerald-500" />
-            服务在线
-          </div>
-          <div className="mt-1">v0.1.0 · Kylin V11</div>
+        {/* 折叠按钮 + 底部信息 */}
+        <div className="shrink-0 border-t border-slate-800">
+          <button
+            onClick={() => setNavCollapsed(v => !v)}
+            className={`w-full flex items-center text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 transition-colors text-xs ${
+              navCollapsed ? 'justify-center py-3 px-0' : 'gap-2 px-4 py-2.5'
+            }`}
+            title={navCollapsed ? '展开导航栏' : '收起导航栏'}
+          >
+            {navCollapsed ? (
+              <PanelLeftOpen className="w-4 h-4" />
+            ) : (
+              <>
+                <PanelLeftClose className="w-4 h-4" />
+                <span>收起导航</span>
+              </>
+            )}
+          </button>
+
+          {!navCollapsed && (
+            <div className="px-4 py-3 text-xs text-slate-500">
+              <div className="flex items-center gap-2">
+                <div className="w-2 h-2 rounded-full bg-emerald-500" />
+                服务在线
+              </div>
+              <div className="mt-1">v0.1.0 · Kylin V11</div>
+            </div>
+          )}
         </div>
       </aside>
 
