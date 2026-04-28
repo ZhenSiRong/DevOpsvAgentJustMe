@@ -1,6 +1,8 @@
 """MCP Server 管理 API —— 外部 MCP Server 的连接配置与生命周期管理
 
 端点：
+- GET    /api/v1/mcp/env-check            环境依赖检测
+- POST   /api/v1/mcp/servers/import       JSON 批量导入（Claude Desktop 格式）
 - GET    /api/v1/mcp/servers              列出所有配置
 - POST   /api/v1/mcp/servers              新增配置
 - GET    /api/v1/mcp/servers/{id}         获取单个配置
@@ -15,7 +17,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import shutil
+import subprocess
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
@@ -60,6 +65,10 @@ class MCPServerUpdateRequest(BaseModel):
     env: dict[str, str] | None = None
     url: str | None = None
     cwd: str | None = None
+
+
+class MCPImportRequest(BaseModel):
+    json_text: str = Field(..., description="Claude Desktop 格式的 JSON 配置文本")
 
 
 # ============================================================
@@ -253,3 +262,211 @@ async def list_connected():
     registry = get_registry()
     servers = registry.list_mcp_servers()
     return APIResponse(data=servers)
+
+
+# ============================================================
+#  环境依赖检测
+# ============================================================
+
+
+def _check_binary(name: str, version_flag: str = "--version") -> dict[str, Any]:
+    """检测单个二进制文件的可用性和版本。"""
+    path = shutil.which(name)
+    if not path:
+        return {"name": name, "available": False, "version": None, "path": None}
+
+    try:
+        result = subprocess.run(
+            [name, version_flag],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        version = (result.stdout.strip() or result.stderr.strip())[:200]
+    except Exception:
+        version = None
+
+    return {"name": name, "available": True, "version": version, "path": path}
+
+
+@router.get("/env-check", response_model=APIResponse, summary="检测 MCP 运行环境依赖")
+async def env_check():
+    """
+    检测当前系统是否具备运行各类 MCP Server 的依赖。
+
+    返回每个依赖的可用状态、版本号和路径。
+    龙芯(loongarch64)环境下 node/npm/npx/uv 通常不可用，
+    建议优先使用内置 Python MCP Server（零外部依赖）。
+    """
+    checks = [
+        _check_binary("python3"),
+        _check_binary("python"),
+        _check_binary("pip3"),
+        _check_binary("node"),
+        _check_binary("npm"),
+        _check_binary("npx"),
+        _check_binary("uv"),
+    ]
+
+    # 标记哪些 server 类型可用
+    python_ready = any(c["available"] for c in checks if c["name"] in ("python3", "python"))
+    node_ready = any(c["available"] for c in checks if c["name"] == "node")
+    npm_ready = any(c["available"] for c in checks if c["name"] == "npm")
+
+    return APIResponse(data={
+        "dependencies": checks,
+        "summary": {
+            "python_ready": python_ready,
+            "node_ready": node_ready,
+            "npm_ready": npm_ready,
+            "recommended_transport": "stdio" if python_ready else None,
+        },
+        "note": "龙芯(loongarch64)架构下通常无 node/npm 预编译包，"
+                "建议使用内置 Python MCP Server（纯标准库实现）。",
+    })
+
+
+# ============================================================
+#  JSON 批量导入（Claude Desktop 格式）
+# ============================================================
+
+
+def _detect_builtin_server(command: str, args: list[str]) -> dict[str, Any] | None:
+    """
+    检测是否为已知的外部 MCP Server，返回适配建议。
+    如果检测到是 npm 包，提示龙芯上不可用。
+    """
+    if not command:
+        return None
+
+    cmd_lower = command.lower()
+    full = " ".join([command] + args).lower()
+
+    # npm / npx / node 类
+    if any(x in cmd_lower for x in ("npx", "npm", "node")):
+        return {
+            "type": "npm",
+            "compatible": False,
+            "reason": "需要 Node.js，龙芯(loongarch64)通常无预编译包",
+            "suggestion": "使用内置 Python MCP Server 替代，或通过 pip 安装纯 Python 实现",
+        }
+
+    # uv 类
+    if "uv" in cmd_lower:
+        return {
+            "type": "uv",
+            "compatible": False,
+            "reason": "需要 uv，龙芯(loongarch64)通常无预编译包",
+            "suggestion": "使用 python3 直接运行内置 MCP Server",
+        }
+
+    # Python 类
+    if any(x in cmd_lower for x in ("python", "python3")):
+        return {
+            "type": "python",
+            "compatible": True,
+            "reason": "纯 Python 实现，龙芯兼容",
+            "suggestion": None,
+        }
+
+    return {
+        "type": "unknown",
+        "compatible": None,
+        "reason": "未知命令类型",
+        "suggestion": "请手动验证该命令在目标架构上的可用性",
+    }
+
+
+@router.post("/servers/import", response_model=APIResponse, summary="JSON 批量导入 MCP Server")
+async def import_servers(req: MCPImportRequest):
+    """
+    从 Claude Desktop 格式的 JSON 配置批量导入 MCP Server。
+
+    支持格式::
+
+        {
+          "mcpServers": {
+            "server-id": {
+              "command": "python3",
+              "args": ["/path/to/server.py"],
+              "env": {"KEY": "value"}
+            }
+          }
+        }
+
+    对每个 Server：
+    - 检测命令类型（python/npm/uv/unknown）
+    - 标记龙芯兼容性
+    - 保存到数据库（transport 固定为 stdio）
+    """
+    try:
+        data = json.loads(req.json_text)
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=422, detail=f"JSON 解析失败: {e}")
+
+    mcp_servers = data.get("mcpServers") or data.get("mcp_servers")
+    if not isinstance(mcp_servers, dict):
+        raise HTTPException(
+            status_code=422,
+            detail="JSON 中未找到 'mcpServers' 或 'mcp_servers' 对象",
+        )
+
+    results = []
+    errors = []
+    for server_id, cfg in mcp_servers.items():
+        if not isinstance(cfg, dict):
+            errors.append({"id": server_id, "error": "配置必须是对象"})
+            continue
+
+        command = cfg.get("command", "")
+        args = cfg.get("args", [])
+        env = cfg.get("env", {})
+
+        # 兼容性检测
+        compat = _detect_builtin_server(command, args)
+
+        # 生成显示名称
+        name = cfg.get("name") or server_id.replace("_", " ").replace("-", " ").title()
+
+        try:
+            existing = await get_mcp_server_by_id(server_id)
+            if existing:
+                # 已存在则更新
+                await update_mcp_server(
+                    server_id=server_id,
+                    name=name,
+                    command=command,
+                    args=args,
+                    env=env,
+                )
+                results.append({
+                    "id": server_id,
+                    "action": "updated",
+                    "name": name,
+                    "compat": compat,
+                })
+            else:
+                await create_mcp_server(
+                    server_id=server_id,
+                    name=name,
+                    transport="stdio",
+                    command=command,
+                    args=args,
+                    env=env,
+                )
+                results.append({
+                    "id": server_id,
+                    "action": "created",
+                    "name": name,
+                    "compat": compat,
+                })
+        except Exception as e:
+            errors.append({"id": server_id, "error": str(e)})
+
+    return APIResponse(data={
+        "imported": results,
+        "errors": errors,
+        "total": len(mcp_servers),
+        "success_count": len(results),
+        "error_count": len(errors),
+    }, message=f"导入完成: {len(results)} 成功, {len(errors)} 失败")

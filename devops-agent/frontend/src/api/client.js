@@ -301,3 +301,11 @@ export const getMCPServerTools = (id) =>
   request(`${API_BASE}/mcp/servers/${encodeURIComponent(id)}/tools`)
 
 export const listConnectedMCPServers = () => request(`${API_BASE}/mcp/connected`)
+
+export const checkMCPEnv = () => request(`${API_BASE}/mcp/env-check`)
+
+export const importMCPServers = (jsonText) =>
+  request(`${API_BASE}/mcp/servers/import`, {
+    method: 'POST',
+    body: JSON.stringify({ json_text: jsonText }),
+  })

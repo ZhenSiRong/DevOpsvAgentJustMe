@@ -17,6 +17,12 @@ import {
   AlertCircle,
   CheckCircle2,
   XCircle,
+  FileJson,
+  Cpu,
+  Download,
+  AlertTriangle,
+  Info,
+  Package,
 } from 'lucide-react'
 import {
   listMCPServers,
@@ -29,6 +35,8 @@ import {
   pingMCPServer,
   getMCPServerTools,
   listConnectedMCPServers,
+  checkMCPEnv,
+  importMCPServers,
 } from '../api/client'
 
 const TRANSPORT_LABELS = {
@@ -45,11 +53,21 @@ export default function MCPPage() {
   const [servers, setServers] = useState([])
   const [connectedInfo, setConnectedInfo] = useState([])
   const [loading, setLoading] = useState(false)
-  const [actionLoading, setActionLoading] = useState({}) // { [serverId]: 'connect' | 'disconnect' | 'ping' | 'tools' }
+  const [actionLoading, setActionLoading] = useState({})
   const [modalOpen, setModalOpen] = useState(false)
+  const [modalTab, setModalTab] = useState('form') // 'form' | 'json'
   const [editingServer, setEditingServer] = useState(null)
-  const [toolsModal, setToolsModal] = useState(null) // { serverId, tools: [] }
+  const [toolsModal, setToolsModal] = useState(null)
   const [error, setError] = useState(null)
+
+  // 环境检测
+  const [envInfo, setEnvInfo] = useState(null)
+  const [envLoading, setEnvLoading] = useState(false)
+
+  // JSON 导入
+  const [jsonText, setJsonText] = useState('')
+  const [importLoading, setImportLoading] = useState(false)
+  const [importResult, setImportResult] = useState(null)
 
   const [form, setForm] = useState({
     id: '',
@@ -85,9 +103,24 @@ export default function MCPPage() {
     }
   }, [])
 
+  const loadEnv = useCallback(async () => {
+    setEnvLoading(true)
+    try {
+      const res = await checkMCPEnv()
+      if (res.code === 0) {
+        setEnvInfo(res.data)
+      }
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setEnvLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
     loadData()
-  }, [loadData])
+    loadEnv()
+  }, [loadData, loadEnv])
 
   const isConnected = (serverId) =>
     connectedInfo.some((c) => c.id === serverId && c.connected)
@@ -99,6 +132,8 @@ export default function MCPPage() {
 
   const handleOpenAdd = () => {
     setEditingServer(null)
+    setModalTab('form')
+    setImportResult(null)
     setForm({
       id: '',
       name: '',
@@ -110,6 +145,44 @@ export default function MCPPage() {
       cwd: '',
     })
     setModalOpen(true)
+  }
+
+  const handleOpenJsonImport = () => {
+    setEditingServer(null)
+    setModalTab('json')
+    setImportResult(null)
+    setJsonText('')
+    setModalOpen(true)
+  }
+
+  const handleAddBuiltin = async (builtin) => {
+    try {
+      const res = await createMCPServer(builtin)
+      if (res.code !== 0) throw new Error(res.message)
+      await loadData()
+    } catch (e) {
+      alert('添加内置 Server 失败: ' + e.message)
+    }
+  }
+
+  const handleImportJson = async () => {
+    if (!jsonText.trim()) {
+      alert('请粘贴 JSON 配置')
+      return
+    }
+    setImportLoading(true)
+    setImportResult(null)
+    try {
+      const res = await importMCPServers(jsonText)
+      setImportResult(res)
+      if (res.code === 0) {
+        await loadData()
+      }
+    } catch (e) {
+      setImportResult({ code: -1, message: e.message })
+    } finally {
+      setImportLoading(false)
+    }
   }
 
   const handleOpenEdit = (srv) => {
@@ -189,7 +262,38 @@ export default function MCPPage() {
     }
   }
 
-  const handleConnect = async (id) => {
+  const _needsDependency = (srv) => {
+    const cmd = (srv.command || '').toLowerCase()
+    if (cmd.includes('node') || cmd.includes('npm') || cmd.includes('npx')) {
+      return { type: 'node', name: 'Node.js' }
+    }
+    if (cmd.includes('uv')) {
+      return { type: 'uv', name: 'uv' }
+    }
+    if (cmd.includes('python') || cmd.includes('python3')) {
+      return { type: 'python', name: 'Python' }
+    }
+    return null
+  }
+
+  const handleConnect = async (srv) => {
+    const id = typeof srv === 'string' ? srv : srv.id
+    const server = typeof srv === 'string' ? servers.find((s) => s.id === srv) : srv
+
+    // 依赖预检查
+    const dep = _needsDependency(server)
+    if (dep && envInfo) {
+      const depCheck = envInfo.dependencies?.find((d) => d.name === dep.type)
+      if (!depCheck?.available) {
+        const ok = confirm(
+          `⚠️ 依赖缺失\n\n该 MCP Server 需要 ${dep.name}，但当前环境未检测到。\n\n` +
+          `在龙芯(loongarch64)架构下，${dep.name} 通常无预编译包，可能导致连接失败。\n\n` +
+          `是否仍尝试连接？`
+        )
+        if (!ok) return
+      }
+    }
+
     setActionLoading((p) => ({ ...p, [id]: 'connect' }))
     try {
       const res = await connectMCPServer(id)
@@ -244,7 +348,7 @@ export default function MCPPage() {
   return (
     <div className="p-4 lg:p-6 max-w-6xl mx-auto">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-4">
         <div>
           <h1 className="text-xl font-semibold text-slate-100 flex items-center gap-2">
             <Plug className="w-6 h-6 text-primary-400" />
@@ -254,13 +358,136 @@ export default function MCPPage() {
             连接外部 MCP Server，将第三方工具接入 Agent 推理链路
           </p>
         </div>
-        <button
-          onClick={handleOpenAdd}
-          className="flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-500 rounded-lg text-sm font-medium transition-colors"
-        >
-          <Plus className="w-4 h-4" />
-          新增配置
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleOpenJsonImport}
+            className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-sm font-medium transition-colors"
+          >
+            <FileJson className="w-4 h-4" />
+            JSON 导入
+          </button>
+          <button
+            onClick={handleOpenAdd}
+            className="flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-500 rounded-lg text-sm font-medium transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            新增配置
+          </button>
+        </div>
+      </div>
+
+      {/* 环境检测信息栏 */}
+      <div className="mb-4 bg-slate-900/60 border border-slate-800 rounded-xl p-3">
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex items-center gap-1.5 text-xs text-slate-400">
+            <Cpu className="w-3.5 h-3.5" />
+            <span className="font-medium">运行环境:</span>
+          </div>
+          {envLoading ? (
+            <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-500" />
+          ) : envInfo?.dependencies ? (
+            envInfo.dependencies.map((dep) => (
+              <span
+                key={dep.name}
+                className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded font-mono ${
+                  dep.available
+                    ? 'bg-emerald-900/30 text-emerald-400 border border-emerald-800/30'
+                    : 'bg-red-900/20 text-red-400 border border-red-800/20'
+                }`}
+                title={dep.version || ''}
+              >
+                {dep.available ? <CheckCircle2 className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
+                {dep.name}
+              </span>
+            ))
+          ) : null}
+          <button
+            onClick={loadEnv}
+            disabled={envLoading}
+            className="ml-auto flex items-center gap-1 text-xs text-slate-500 hover:text-slate-300 transition-colors"
+          >
+            <RefreshCw className={`w-3 h-3 ${envLoading ? 'animate-spin' : ''}`} />
+            刷新
+          </button>
+        </div>
+        {envInfo?.summary?.python_ready && !envInfo?.summary?.node_ready && (
+          <div className="mt-2 flex items-start gap-2 text-xs text-amber-400/80">
+            <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+            <span>
+              检测到 Node.js 不可用。龙芯(loongarch64)架构下 npm MCP Server 无法运行，
+              建议使用下方「内置 Python MCP Server」或纯 Python 实现的 Server。
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* 内置 Python MCP Server 快捷添加 */}
+      <div className="mb-4">
+        <div className="flex items-center gap-2 mb-2">
+          <Package className="w-4 h-4 text-slate-400" />
+          <span className="text-sm font-medium text-slate-300">内置 Python MCP Server（零外部依赖，龙芯兼容）</span>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {[
+            {
+              id: 'builtin-filesystem',
+              name: '文件系统',
+              icon: '📁',
+              config: {
+                id: 'builtin-filesystem',
+                name: '文件系统 MCP',
+                transport: 'stdio',
+                command: 'python3',
+                args: ['/root/devops-agent/scripts/mcp_servers/filesystem_server.py'],
+                env: {},
+              },
+            },
+            {
+              id: 'builtin-fetch',
+              name: 'HTTP 请求',
+              icon: '🌐',
+              config: {
+                id: 'builtin-fetch',
+                name: 'HTTP Fetch MCP',
+                transport: 'stdio',
+                command: 'python3',
+                args: ['/root/devops-agent/scripts/mcp_servers/fetch_server.py'],
+                env: {},
+              },
+            },
+            {
+              id: 'builtin-time',
+              name: '时间日期',
+              icon: '🕐',
+              config: {
+                id: 'builtin-time',
+                name: 'Time MCP',
+                transport: 'stdio',
+                command: 'python3',
+                args: ['/root/devops-agent/scripts/mcp_servers/time_server.py'],
+                env: {},
+              },
+            },
+          ].map((builtin) => {
+            const exists = servers.some((s) => s.id === builtin.id)
+            return (
+              <button
+                key={builtin.id}
+                onClick={() => handleAddBuiltin(builtin.config)}
+                disabled={exists}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                  exists
+                    ? 'bg-slate-800/50 text-slate-600 cursor-not-allowed'
+                    : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700'
+                }`}
+              >
+                <span>{builtin.icon}</span>
+                {builtin.name}
+                {exists && <span className="text-slate-500">(已添加)</span>}
+              </button>
+            )
+          })}
+        </div>
       </div>
 
       {/* Error banner */}
@@ -440,7 +667,7 @@ export default function MCPPage() {
                     </>
                   ) : (
                     <button
-                      onClick={() => handleConnect(srv.id)}
+                      onClick={() => handleConnect(srv)}
                       disabled={actionLoading[srv.id] === 'connect'}
                       className="flex items-center gap-1.5 px-3 py-1.5 bg-primary-600 hover:bg-primary-500 text-white rounded-lg text-xs font-medium transition-colors disabled:opacity-50"
                     >
@@ -459,7 +686,7 @@ export default function MCPPage() {
         </div>
       )}
 
-      {/* Add/Edit Modal */}
+      {/* Add/Edit/Import Modal */}
       {modalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60">
           <div className="bg-slate-900 border border-slate-700 rounded-xl w-full max-w-lg max-h-[90vh] overflow-auto">
@@ -475,112 +702,203 @@ export default function MCPPage() {
               </button>
             </div>
 
-            <div className="px-5 py-4 space-y-4">
-              {/* ID */}
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1.5">
-                  唯一标识符 <span className="text-red-400">*</span>
-                </label>
-                <input
-                  value={form.id}
-                  onChange={(e) => setForm((f) => ({ ...f, id: e.target.value }))}
-                  disabled={!!editingServer}
-                  placeholder="例如：filesystem"
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-primary-500 disabled:opacity-50"
-                />
-              </div>
-
-              {/* Name */}
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1.5">
-                  显示名称 <span className="text-red-400">*</span>
-                </label>
-                <input
-                  value={form.name}
-                  onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                  placeholder="例如：文件系统 MCP"
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-primary-500"
-                />
-              </div>
-
-              {/* Transport */}
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1.5">
-                  传输方式
-                </label>
-                <select
-                  value={form.transport}
-                  onChange={(e) => setForm((f) => ({ ...f, transport: e.target.value }))}
-                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-primary-500"
+            {/* Tab 切换（仅在非编辑模式显示） */}
+            {!editingServer && (
+              <div className="flex border-b border-slate-800">
+                <button
+                  onClick={() => setModalTab('form')}
+                  className={`flex-1 px-4 py-2.5 text-sm font-medium transition-colors ${
+                    modalTab === 'form'
+                      ? 'text-primary-400 border-b-2 border-primary-500'
+                      : 'text-slate-500 hover:text-slate-300'
+                  }`}
                 >
-                  <option value="stdio">stdio — 本地子进程</option>
-                  <option value="sse">SSE — HTTP Server-Sent Events</option>
-                </select>
+                  手动配置
+                </button>
+                <button
+                  onClick={() => setModalTab('json')}
+                  className={`flex-1 px-4 py-2.5 text-sm font-medium transition-colors ${
+                    modalTab === 'json'
+                      ? 'text-primary-400 border-b-2 border-primary-500'
+                      : 'text-slate-500 hover:text-slate-300'
+                  }`}
+                >
+                  JSON 导入
+                </button>
               </div>
+            )}
 
-              {form.transport === 'stdio' ? (
-                <>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-400 mb-1.5">
-                      命令（可执行文件路径）
-                    </label>
-                    <input
-                      value={form.command}
-                      onChange={(e) => setForm((f) => ({ ...f, command: e.target.value }))}
-                      placeholder="例如：python3 或 npx"
-                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-primary-500"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-400 mb-1.5">
-                      参数（每行一个）
-                    </label>
-                    <textarea
-                      value={form.args}
-                      onChange={(e) => setForm((f) => ({ ...f, args: e.target.value }))}
-                      placeholder="/path/to/server.py&#10;--verbose"
-                      rows={3}
-                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-primary-500 font-mono"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-400 mb-1.5">
-                      环境变量（每行一个 KEY=VALUE）
-                    </label>
-                    <textarea
-                      value={form.env}
-                      onChange={(e) => setForm((f) => ({ ...f, env: e.target.value }))}
-                      placeholder="API_KEY=sk-xxxx&#10;DEBUG=1"
-                      rows={3}
-                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-primary-500 font-mono"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-medium text-slate-400 mb-1.5">
-                      工作目录
-                    </label>
-                    <input
-                      value={form.cwd}
-                      onChange={(e) => setForm((f) => ({ ...f, cwd: e.target.value }))}
-                      placeholder="/root/devops-agent"
-                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-primary-500"
-                    />
-                  </div>
-                </>
-              ) : (
+            {modalTab === 'form' || editingServer ? (
+              <div className="px-5 py-4 space-y-4">
+                {/* ID */}
                 <div>
                   <label className="block text-xs font-medium text-slate-400 mb-1.5">
-                    SSE 端点 URL
+                    唯一标识符 <span className="text-red-400">*</span>
                   </label>
                   <input
-                    value={form.url}
-                    onChange={(e) => setForm((f) => ({ ...f, url: e.target.value }))}
-                    placeholder="http://localhost:3000/sse"
+                    value={form.id}
+                    onChange={(e) => setForm((f) => ({ ...f, id: e.target.value }))}
+                    disabled={!!editingServer}
+                    placeholder="例如：filesystem"
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-primary-500 disabled:opacity-50"
+                  />
+                </div>
+
+                {/* Name */}
+                <div>
+                  <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                    显示名称 <span className="text-red-400">*</span>
+                  </label>
+                  <input
+                    value={form.name}
+                    onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                    placeholder="例如：文件系统 MCP"
                     className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-primary-500"
                   />
                 </div>
-              )}
-            </div>
+
+                {/* Transport */}
+                <div>
+                  <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                    传输方式
+                  </label>
+                  <select
+                    value={form.transport}
+                    onChange={(e) => setForm((f) => ({ ...f, transport: e.target.value }))}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-primary-500"
+                  >
+                    <option value="stdio">stdio — 本地子进程</option>
+                    <option value="sse">SSE — HTTP Server-Sent Events</option>
+                  </select>
+                </div>
+
+                {form.transport === 'stdio' ? (
+                  <>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                        命令（可执行文件路径）
+                      </label>
+                      <input
+                        value={form.command}
+                        onChange={(e) => setForm((f) => ({ ...f, command: e.target.value }))}
+                        placeholder="例如：python3 或 npx"
+                        className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-primary-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                        参数（每行一个）
+                      </label>
+                      <textarea
+                        value={form.args}
+                        onChange={(e) => setForm((f) => ({ ...f, args: e.target.value }))}
+                        placeholder="/path/to/server.py&#10;--verbose"
+                        rows={3}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-primary-500 font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                        环境变量（每行一个 KEY=VALUE）
+                      </label>
+                      <textarea
+                        value={form.env}
+                        onChange={(e) => setForm((f) => ({ ...f, env: e.target.value }))}
+                        placeholder="API_KEY=sk-xxxx&#10;DEBUG=1"
+                        rows={3}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-primary-500 font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                        工作目录
+                      </label>
+                      <input
+                        value={form.cwd}
+                        onChange={(e) => setForm((f) => ({ ...f, cwd: e.target.value }))}
+                        placeholder="/root/devops-agent"
+                        className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-primary-500"
+                      />
+                    </div>
+                  </>
+                ) : (
+                  <div>
+                    <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                      SSE 端点 URL
+                    </label>
+                    <input
+                      value={form.url}
+                      onChange={(e) => setForm((f) => ({ ...f, url: e.target.value }))}
+                      placeholder="http://localhost:3000/sse"
+                      className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-primary-500"
+                    />
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="px-5 py-4 space-y-4">
+                <div className="bg-slate-950/50 border border-slate-800 rounded-lg p-3 text-xs text-slate-400 space-y-1">
+                  <div className="flex items-center gap-1.5">
+                    <Info className="w-3.5 h-3.5 text-primary-400" />
+                    <span className="font-medium text-slate-300">支持 Claude Desktop 配置格式</span>
+                  </div>
+                  <p>粘贴包含 mcpServers 对象的 JSON，系统将自动解析并导入每个 Server 配置。</p>
+                  <p className="text-slate-500">npm/uv 类命令会被标记为龙芯不兼容，建议改用内置 Python Server。</p>
+                </div>
+
+                <textarea
+                  value={jsonText}
+                  onChange={(e) => setJsonText(e.target.value)}
+                  placeholder={`{\n  "mcpServers": {\n    "filesystem": {\n      "command": "python3",\n      "args": ["/path/to/server.py"]\n    }\n  }\n}`}
+                  rows={10}
+                  className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-primary-500 font-mono"
+                />
+
+                {importResult && (
+                  <div className={`rounded-lg p-3 text-xs space-y-1 ${
+                    importResult.code === 0
+                      ? 'bg-emerald-900/20 border border-emerald-800/30'
+                      : 'bg-red-900/20 border border-red-800/30'
+                  }`}>
+                    <div className={`font-medium ${importResult.code === 0 ? 'text-emerald-300' : 'text-red-300'}`}>
+                      {importResult.message}
+                    </div>
+                    {importResult.data?.imported?.length > 0 && (
+                      <div className="space-y-1 mt-1">
+                        {importResult.data.imported.map((item) => (
+                          <div key={item.id} className="flex items-center gap-2">
+                            <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
+                            <span className="text-slate-300">{item.name}</span>
+                            <span className={`text-xs px-1.5 py-0.5 rounded ${
+                              item.compat?.compatible === true
+                                ? 'bg-emerald-900/30 text-emerald-400'
+                                : item.compat?.compatible === false
+                                ? 'bg-red-900/30 text-red-400'
+                                : 'bg-slate-800 text-slate-500'
+                            }`}>
+                              {item.compat?.type || 'unknown'}
+                            </span>
+                            {item.compat?.compatible === false && (
+                              <span className="text-red-400/80">{item.compat.reason}</span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {importResult.data?.errors?.length > 0 && (
+                      <div className="space-y-1 mt-1">
+                        {importResult.data.errors.map((err) => (
+                          <div key={err.id} className="flex items-center gap-2 text-red-400">
+                            <XCircle className="w-3 h-3 shrink-0" />
+                            <span>{err.id}: {err.error}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="flex items-center justify-end gap-3 px-5 py-4 border-t border-slate-800">
               <button
@@ -589,12 +907,23 @@ export default function MCPPage() {
               >
                 取消
               </button>
-              <button
-                onClick={handleSave}
-                className="px-4 py-2 bg-primary-600 hover:bg-primary-500 rounded-lg text-sm font-medium transition-colors"
-              >
-                {editingServer ? '保存修改' : '创建配置'}
-              </button>
+              {modalTab === 'json' && !editingServer ? (
+                <button
+                  onClick={handleImportJson}
+                  disabled={importLoading}
+                  className="flex items-center gap-2 px-4 py-2 bg-primary-600 hover:bg-primary-500 disabled:bg-slate-700 rounded-lg text-sm font-medium transition-colors"
+                >
+                  {importLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                  导入
+                </button>
+              ) : (
+                <button
+                  onClick={handleSave}
+                  className="px-4 py-2 bg-primary-600 hover:bg-primary-500 rounded-lg text-sm font-medium transition-colors"
+                >
+                  {editingServer ? '保存修改' : '创建配置'}
+                </button>
+              )}
             </div>
           </div>
         </div>
