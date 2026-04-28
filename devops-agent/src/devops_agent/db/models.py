@@ -246,6 +246,54 @@ class DynamicTool:
         }
 
 
+@dataclass
+class MCPServer:
+    id: str
+    name: str
+    transport: str  # stdio | sse
+    command: str | None = None
+    args: list[str] = field(default_factory=list)
+    env: dict[str, str] = field(default_factory=dict)
+    url: str | None = None
+    cwd: str | None = None
+    is_active: bool = True
+    created_at: str = ""
+    updated_at: str = ""
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> "MCPServer":
+        args_raw = _row_get(row, "args", "[]")
+        env_raw = _row_get(row, "env", "{}")
+        return cls(
+            id=row["id"],
+            name=row["name"],
+            transport=row["transport"],
+            command=_row_get(row, "command"),
+            args=json.loads(args_raw) if args_raw else [],
+            env=json.loads(env_raw) if env_raw else {},
+            url=_row_get(row, "url"),
+            cwd=_row_get(row, "cwd"),
+            is_active=bool(_row_get(row, "is_active", 1)),
+            created_at=_row_get(row, "created_at", ""),
+            updated_at=_row_get(row, "updated_at", ""),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "transport": self.transport,
+            "command": self.command,
+            "args": self.args,
+            "env": self.env,
+            "url": self.url,
+            "cwd": self.cwd,
+            "is_active": self.is_active,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+
 __all__ = [
     "Session",
     "Message",
@@ -254,4 +302,5 @@ __all__ = [
     "ConversationState",
     "Memory",
     "DynamicTool",
+    "MCPServer",
 ]

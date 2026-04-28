@@ -31,17 +31,23 @@ class ToolRegistry:
         registry.register(DiskUsageTool())
         tool = registry.get("disk_usage")
         result = await registry.execute("disk_usage", {"path": "/"}, ctx)
+
+    MCP 支持：
+        registry.connect_mcp_server({...})   # 连接外部 MCP Server
+        registry.disconnect_mcp_server("id") # 断开并注销其工具
     """
 
     _instance: "ToolRegistry | None" = None
     _tools: dict[str, MCPTool]
     _builtin_names: set[str]  # 内置工具名称集合（防覆盖）
+    _mcp_clients: dict[str, Any]  # server_id -> MCPClient
 
     def __new__(cls) -> "ToolRegistry":
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._tools = {}
             cls._instance._builtin_names = set()
+            cls._instance._mcp_clients = {}
         return cls._instance
 
     def register(self, tool: MCPTool) -> None:
@@ -179,6 +185,108 @@ class ToolRegistry:
         logger.info("从数据库加载 %d 个动态工具", count)
         return count
 
+    # ============================================================
+    #  MCP Server 连接管理
+    # ============================================================
+
+    async def connect_mcp_server(self, config: dict[str, Any]) -> list[str]:
+        """连接外部 MCP Server，将其工具注册到 Registry。
+
+        Args:
+            config: MCP Server 配置字典，必须包含 id/transport/command 等
+
+        Returns:
+            注册成功的工具名称列表
+        """
+        from ..mcp.client import MCPClient
+        from ..mcp.adapter import ExternalMCPTool
+
+        server_id = config["id"]
+
+        # 如果已连接，先断开
+        if server_id in self._mcp_clients:
+            logger.warning("MCP Server '%s' 已连接，先断开再重连", server_id)
+            await self.disconnect_mcp_server(server_id)
+
+        client = MCPClient(config)
+        await client.connect()
+
+        self._mcp_clients[server_id] = client
+
+        tool_names = []
+        for tool_def in client.tools:
+            tool_name = tool_def["name"]
+
+            # 名称冲突检查：不能与内置工具同名
+            if tool_name in self._builtin_names:
+                logger.warning(
+                    "MCP 工具 %s 与内置工具重名，跳过注册", tool_name
+                )
+                continue
+
+            tool = ExternalMCPTool(client, tool_def)
+            self._tools[tool_name] = tool
+            tool_names.append(tool_name)
+
+        logger.info(
+            "MCP Server '%s' 已连接，注册 %d 个工具: %s",
+            server_id, len(tool_names), tool_names,
+        )
+        return tool_names
+
+    async def disconnect_mcp_server(self, server_id: str) -> list[str]:
+        """断开 MCP Server，注销其注册的所有工具。
+
+        Args:
+            server_id: MCP Server ID
+
+        Returns:
+            被注销的工具名称列表
+        """
+        client = self._mcp_clients.pop(server_id, None)
+        if client is None:
+            logger.warning("MCP Server '%s' 未连接，无需断开", server_id)
+            return []
+
+        removed = []
+        for tool_def in client.tools:
+            tool_name = tool_def["name"]
+            if tool_name in self._tools and not self.is_builtin(tool_name):
+                del self._tools[tool_name]
+                removed.append(tool_name)
+
+        await client.disconnect()
+        logger.info(
+            "MCP Server '%s' 已断开，注销 %d 个工具: %s",
+            server_id, len(removed), removed,
+        )
+        return removed
+
+    def list_mcp_servers(self) -> list[dict[str, Any]]:
+        """返回所有已连接的 MCP Server 信息。"""
+        return [
+            {
+                "id": sid,
+                "name": client.name,
+                "connected": client.is_connected,
+                "tool_count": len(client.tools),
+                "tool_names": [t["name"] for t in client.tools],
+                "server_info": client.server_info,
+            }
+            for sid, client in self._mcp_clients.items()
+        ]
+
+    def get_mcp_client(self, server_id: str) -> Any | None:
+        """按 ID 获取已连接的 MCP Client 实例。"""
+        return self._mcp_clients.get(server_id)
+
+    async def ping_mcp_server(self, server_id: str) -> bool:
+        """对指定 MCP Server 发送心跳。"""
+        client = self._mcp_clients.get(server_id)
+        if client is None:
+            return False
+        return await client.ping()
+
     def clear(self) -> None:
         """清空所有注册（主要用于测试隔离）"""
         self._tools.clear()
@@ -234,6 +342,21 @@ async def dispatch_tool(name: str, arguments: dict[str, Any], ctx: Any) -> dict[
     return await get_registry().execute(name, arguments, ctx)
 
 
+async def connect_mcp_server(config: dict[str, Any]) -> list[str]:
+    """全局快捷函数：连接 MCP Server"""
+    return await get_registry().connect_mcp_server(config)
+
+
+async def disconnect_mcp_server(server_id: str) -> list[str]:
+    """全局快捷函数：断开 MCP Server"""
+    return await get_registry().disconnect_mcp_server(server_id)
+
+
+def list_mcp_servers() -> list[dict[str, Any]]:
+    """全局快捷函数：列出已连接的 MCP Server"""
+    return get_registry().list_mcp_servers()
+
+
 __all__ = [
     "ToolRegistry",
     "get_registry",
@@ -243,4 +366,7 @@ __all__ = [
     "list_tools",
     "get_tool_definitions",
     "dispatch_tool",
+    "connect_mcp_server",
+    "disconnect_mcp_server",
+    "list_mcp_servers",
 ]

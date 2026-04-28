@@ -36,6 +36,36 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("动态工具加载失败(非阻塞): %s", e)
 
+    # 自动连接已启用的 MCP Server
+    try:
+        from .db.mcp_servers import list_mcp_servers
+        mcp_configs = await list_mcp_servers(active_only=True)
+        connected_count = 0
+        for cfg in mcp_configs:
+            try:
+                config_dict = {
+                    "id": cfg.id,
+                    "name": cfg.name,
+                    "transport": cfg.transport,
+                    "command": cfg.command,
+                    "args": cfg.args,
+                    "env": cfg.env,
+                    "url": cfg.url,
+                    "cwd": cfg.cwd,
+                }
+                tool_names = await registry.connect_mcp_server(config_dict)
+                connected_count += 1
+                logger.info(
+                    "✅ MCP Server '%s' 自动连接成功，注册 %d 个工具: %s",
+                    cfg.id, len(tool_names), tool_names,
+                )
+            except Exception as e:
+                logger.warning("MCP Server '%s' 自动连接失败: %s", cfg.id, e)
+        if connected_count > 0:
+            logger.info("✅ MCP Server 自动连接完成: %d/%d 个", connected_count, len(mcp_configs))
+    except Exception as e:
+        logger.warning("MCP Server 自动连接失败(非阻塞): %s", e)
+
     elapsed = time.perf_counter() - start
     logger.info("✅ DevOps Agent 启动完成 (%.2fs)", elapsed)
 
@@ -83,7 +113,7 @@ def create_app() -> FastAPI:
     # ============================================================
     #  注册路由模块（Day 4 完成 — 8 个路由端点 + Day 5 动态工具）
     # ============================================================
-    from .api.routes import health, probe, execute, chat, sessions, audit, reasoning, safety, tools, config
+    from .api.routes import health, probe, execute, chat, sessions, audit, reasoning, safety, tools, config, mcp
 
     app.include_router(health.router)          # /health, /api/v1/info
     app.include_router(probe.router)            # /api/v1/probe/*
@@ -95,6 +125,7 @@ def create_app() -> FastAPI:
     app.include_router(safety.router)           # /api/v1/safety/*
     app.include_router(tools.router)            # /api/v1/tools/* (动态工具)
     app.include_router(config.router)           # /api/v1/config/* (系统配置)
+    app.include_router(mcp.router)              # /api/v1/mcp/* (MCP Server 管理)
 
     # 挂载前端静态文件（如果存在）
     import os

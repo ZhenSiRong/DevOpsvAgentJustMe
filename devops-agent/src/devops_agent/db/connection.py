@@ -165,6 +165,23 @@ CREATE TABLE IF NOT EXISTS dynamic_tools (
     updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_dynamic_tools_active ON dynamic_tools(is_active);
+
+-- ========================================
+--  9. MCP Server 连接配置表（外部 MCP Server 注册中心）
+-- ========================================
+CREATE TABLE IF NOT EXISTS mcp_servers (
+    id          TEXT PRIMARY KEY,         -- 用户指定的标识符（如 github, filesystem）
+    name        TEXT NOT NULL,            -- 显示名称
+    transport   TEXT NOT NULL,            -- stdio | sse
+    command     TEXT,                     -- stdio 模式：可执行命令
+    args        TEXT DEFAULT '[]',        -- stdio 模式：命令参数（JSON 数组）
+    env         TEXT DEFAULT '{}',        -- 环境变量（JSON 对象）
+    url         TEXT,                     -- sse 模式：服务端点 URL
+    cwd         TEXT,                     -- stdio 模式：工作目录
+    is_active   INTEGER NOT NULL DEFAULT 1,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 
