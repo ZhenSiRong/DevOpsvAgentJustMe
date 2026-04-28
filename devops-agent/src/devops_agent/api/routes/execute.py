@@ -21,7 +21,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from ...safety.executor import (
     execute,
-    execute_safe,
+    execute_unrestricted,
     ExecutionStatus,
 )
 from ..schemas import APIResponse, ExecuteRequest, ExecuteResponse
@@ -76,9 +76,9 @@ async def execute_command(
             },
         )
 
-    # ---- 真实执行 ----
+    # ---- 真实执行（运维者终端：只过安全校验，不过白名单） ----
     try:
-        result = await execute(
+        result = await execute_unrestricted(
             command=body.command,
             timeout=body.timeout,
         )

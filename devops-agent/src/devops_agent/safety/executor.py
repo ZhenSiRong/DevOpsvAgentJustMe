@@ -109,6 +109,51 @@ EXECUTION_WHITELIST: list[str] = [
 ]
 
 
+def _get_execution_whitelist() -> list[str]:
+    """
+    从数据库 configs 表读取动态白名单，fallback 到硬编码默认值。
+    键名: execution.whitelist
+    值格式: JSON 数组字符串，如 '["ls","df","ps"]'
+    """
+    try:
+        import asyncio
+        from ..db.config import get_config
+
+        # 同步方式读取（executor 大部分调用在 async 上下文，
+        # 但这里用 run_until_complete 不安全；改为在 async execute() 中调用）
+        # 实际上我们让 execute() 传 whitelist 参数进来，这里只提供 fallback
+        pass
+    except Exception:
+        pass
+    return EXECUTION_WHITELIST
+
+
+async def get_execution_whitelist() -> list[str]:
+    """异步读取动态白名单（从 configs 表）。"""
+    try:
+        from ..db.config import get_config
+
+        raw = await get_config("execution.whitelist")
+        if raw:
+            import json
+
+            parsed = json.loads(raw)
+            if isinstance(parsed, list) and len(parsed) > 0:
+                return parsed
+    except Exception:
+        # 数据库读取失败或解析失败 → 使用硬编码默认值（fail-safe）
+        pass
+    return EXECUTION_WHITELIST
+
+
+async def set_execution_whitelist(whitelist: list[str]) -> None:
+    """将白名单写入 configs 表。"""
+    import json
+    from ..db.config import set_config
+
+    await set_config("execution.whitelist", json.dumps(whitelist, ensure_ascii=False))
+
+
 def is_command_allowed(command: str, whitelist: list[str] | None = None) -> tuple[bool, str]:
     """
     检查命令是否在执行白名单内。
@@ -138,6 +183,57 @@ def is_command_allowed(command: str, whitelist: list[str] | None = None) -> tupl
 #  核心执行函数
 # ============================================================
 
+async def execute_unrestricted(
+    command: str,
+    user: str = DEFAULT_EXECUTION_USER,
+    timeout: float = DEFAULT_TIMEOUT_SECONDS,
+    skip_security_check: bool = False,
+) -> ExecutionResult:
+    """
+    无白名单限制的命令执行（供运维者终端手动操作使用）。
+
+    执行流程：
+    1. 安全校验 → validate_command()（拦截 rm -rf / 等危险命令）
+    2. 构建子进程参数（sudo 切用户）
+    3. 异步执行 + 超时控制
+    4. 收集输出 + 构建结果
+
+    注意：不经过白名单检查，运维者可以执行任何安全校验器放行的命令。
+    """
+    start_time = time.monotonic()
+    result = ExecutionResult(
+        command=command,
+        executed_by=user,
+    )
+
+    # ---- Step 1: 安全校验 ----
+    if not skip_security_check:
+        try:
+            from .validator import validate_command
+
+            validation = validate_command(command)
+            result.security_check = {
+                "result": validation.result.value,
+                "reason": validation.reason,
+                "rule_id": validation.rule_id or "",
+            }
+
+            if validation.result.value == "BLOCKED":
+                result.status = ExecutionStatus.BLOCKED
+                result.error_message = f"安全校验拦截: {validation.reason}"
+                result.execution_time_ms = (time.monotonic() - start_time) * 1000
+                return result
+
+        except Exception as e:
+            result.status = ExecutionStatus.REJECTED
+            result.error_message = f"安全校验器异常: {type(e).__name__}: {str(e)}"
+            result.execution_time_ms = (time.monotonic() - start_time) * 1000
+            return result
+
+    # ---- Step 2: 直接执行（无白名单） ----
+    return await _do_execute(command, user, timeout, start_time, result)
+
+
 async def execute(
     command: str,
     user: str = DEFAULT_EXECUTION_USER,
@@ -146,11 +242,11 @@ async def execute(
     whitelist: list[str] | None = None,
 ) -> ExecutionResult:
     """
-    安全地以指定用户身份执行一条命令。
+    安全地以指定用户身份执行一条命令（供 Agent 自动调用使用）。
 
     执行流程：
     1. 安全校验 → validate_command()
-    2. 白名单检查 → is_command_allowed()
+    2. 白名单检查 → is_command_allowed()（从 configs 表读取动态白名单）
     3. 构建子进程参数（sudo 切用户）
     4. 异步执行 + 超时控制
     5. 收集输出 + 构建结果
@@ -160,7 +256,7 @@ async def execute(
         user: 执行命令的操作系统用户（默认 devops-runner）
         timeout: 超时时间（秒），超时自动 kill 子进程
         skip_security_test: 是否跳过安全校验（仅测试用，生产环境必须 False
-        whitelist: 自定义白名单，None 使用默认
+        whitelist: 自定义白名单，None 则从 configs 表读取
 
     Returns:
         ExecutionResult 包含状态、输出、错误、安全上下文等信息
@@ -190,13 +286,14 @@ async def execute(
                 return result
 
         except Exception as e:
-            # 安全校验器本身出错：拒绝执行（fail-safe）
             result.status = ExecutionStatus.REJECTED
             result.error_message = f"安全校验器异常: {type(e).__name__}: {str(e)}"
             result.execution_time_ms = (time.monotonic() - start_time) * 1000
             return result
 
-    # ---- Step 2: 白名单检查 ----
+    # ---- Step 2: 白名单检查（Agent 专用） ----
+    if whitelist is None:
+        whitelist = await get_execution_whitelist()
     allowed, reason = is_command_allowed(command, whitelist)
     if not allowed:
         result.status = ExecutionStatus.REJECTED
@@ -204,7 +301,18 @@ async def execute(
         result.execution_time_ms = (time.monotonic() - start_time) * 1000
         return result
 
-    # ---- Step 3: 构建并执行子进程 ----
+    # ---- Step 3: 执行 ----
+    return await _do_execute(command, user, timeout, start_time, result)
+
+
+async def _do_execute(
+    command: str,
+    user: str,
+    timeout: float,
+    start_time: float,
+    result: ExecutionResult,
+) -> ExecutionResult:
+    """实际执行子进程的共享逻辑（被 execute 和 execute_unrestricted 共用）。"""
     try:
         cmd_parts = _parse_command_to_args(command)
 
@@ -217,14 +325,13 @@ async def execute(
             stderr=asyncio.subprocess.PIPE,
         )
 
-        # Step 4: 带超时的等待
+        # 带超时的等待
         try:
             stdout_bytes, stderr_bytes = await asyncio.wait_for(
                 proc.communicate(),
                 timeout=timeout,
             )
         except asyncio.TimeoutError:
-            # 超时：强制杀掉整个进程组
             await _kill_process_tree(proc)
             result.status = ExecutionStatus.TIMEOUT
             result.error_message = (
@@ -235,7 +342,7 @@ async def execute(
             result.execution_time_ms = (time.monotonic() - start_time) * 1000
             return result
 
-        # Step 5: 收集结果
+        # 收集结果
         elapsed = (time.monotonic() - start_time) * 1000
         result.stdout = stdout_bytes.decode("utf-8", errors="replace") if stdout_bytes else ""
         result.stderr = stderr_bytes.decode("utf-8", errors="replace") if stderr_bytes else ""

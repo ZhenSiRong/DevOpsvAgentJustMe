@@ -10,6 +10,11 @@ import {
   CheckCircle,
   XCircle,
   RefreshCw,
+  ListChecks,
+  Save,
+  RotateCcw,
+  Plus,
+  Trash2,
 } from 'lucide-react'
 import {
   safetyStatus,
@@ -20,6 +25,9 @@ import {
   configScan,
   injectionScan,
   injectionStats,
+  getExecutionWhitelist,
+  updateExecutionWhitelist,
+  resetExecutionWhitelist,
 } from '../api/client'
 
 export default function SafetyPage() {
@@ -43,10 +51,18 @@ export default function SafetyPage() {
   const [scanResult, setScanResult] = useState(null)
   const [configLoading, setConfigLoading] = useState(false)
 
+  // 白名单管理
+  const [whitelist, setWhitelist] = useState([])
+  const [whitelistDefault, setWhitelistDefault] = useState([])
+  const [whitelistLoading, setWhitelistLoading] = useState(false)
+  const [whitelistSaving, setWhitelistSaving] = useState(false)
+  const [newRule, setNewRule] = useState('')
+
   useEffect(() => {
     loadStatus()
     loadShieldStats()
     loadConfigPaths()
+    loadWhitelist()
   }, [])
 
   const loadStatus = async () => {
@@ -129,9 +145,67 @@ export default function SafetyPage() {
     }
   }
 
+  const loadWhitelist = async () => {
+    setWhitelistLoading(true)
+    try {
+      const res = await getExecutionWhitelist()
+      if (res.code === 0) {
+        setWhitelist(res.data.whitelist || [])
+        setWhitelistDefault(res.data.default || [])
+      }
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setWhitelistLoading(false)
+    }
+  }
+
+  const handleSaveWhitelist = async () => {
+    setWhitelistSaving(true)
+    try {
+      const res = await updateExecutionWhitelist(whitelist)
+      if (res.code === 0) {
+        alert('白名单已保存（Agent 专用，运维者终端不受限制）')
+      }
+    } catch (e) {
+      alert('保存失败: ' + e.message)
+    } finally {
+      setWhitelistSaving(false)
+    }
+  }
+
+  const handleResetWhitelist = async () => {
+    if (!confirm('确定重置为系统默认白名单？')) return
+    try {
+      const res = await resetExecutionWhitelist()
+      if (res.code === 0) {
+        setWhitelist(res.data.whitelist || [])
+        alert('已重置为默认白名单')
+      }
+    } catch (e) {
+      alert('重置失败: ' + e.message)
+    }
+  }
+
+  const handleAddRule = () => {
+    const trimmed = newRule.trim()
+    if (!trimmed) return
+    if (whitelist.includes(trimmed)) {
+      alert('该规则已存在')
+      return
+    }
+    setWhitelist([...whitelist, trimmed])
+    setNewRule('')
+  }
+
+  const handleRemoveRule = (idx) => {
+    setWhitelist(whitelist.filter((_, i) => i !== idx))
+  }
+
   const sections = [
     { key: 'overview', label: '总览', icon: Shield },
     { key: 'validator', label: '命令校验', icon: Terminal },
+    { key: 'whitelist', label: '命令白名单', icon: ListChecks },
     { key: 'injection', label: '注入防护', icon: ShieldAlert },
     { key: 'config', label: '配置保护', icon: FileLock },
   ]
@@ -286,6 +360,114 @@ export default function SafetyPage() {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ===== 命令白名单 ===== */}
+      {activeSection === 'whitelist' && (
+        <div className="space-y-6">
+          <div className="bg-amber-900/20 border border-amber-800/30 rounded-xl p-4">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 text-amber-400 mt-0.5 shrink-0" />
+              <div>
+                <div className="font-medium text-amber-300 mb-1">白名单仅限制 Agent 自动执行</div>
+                <div className="text-sm text-amber-400/80">
+                  运维者在终端手动输入的命令不受此白名单限制，只经过安全校验器（拦截 rm -rf / 等危险操作）。
+                  Agent（LLM）自动调用的 execute_command 工具才会检查白名单。
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-slate-800/50 border border-slate-800 rounded-xl p-4">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-medium text-slate-200">
+                Agent 命令白名单
+                <span className="ml-2 text-xs text-slate-500">({whitelist.length} 条规则)</span>
+              </h3>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleResetWhitelist}
+                  disabled={whitelistSaving}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-slate-800 hover:bg-slate-700 rounded-lg text-slate-300 transition-colors"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  重置默认
+                </button>
+                <button
+                  onClick={handleSaveWhitelist}
+                  disabled={whitelistSaving}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-primary-600 hover:bg-primary-500 disabled:bg-slate-700 rounded-lg text-white transition-colors"
+                >
+                  {whitelistSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                  保存
+                </button>
+              </div>
+            </div>
+
+            <div className="flex gap-2 mb-4">
+              <input
+                value={newRule}
+                onChange={(e) => setNewRule(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleAddRule()}
+                placeholder="输入命令前缀，如: systemctl status"
+                className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 font-mono focus:outline-none focus:border-primary-500/50"
+              />
+              <button
+                onClick={handleAddRule}
+                className="flex items-center gap-1.5 px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm text-slate-200 transition-colors"
+              >
+                <Plus className="w-4 h-4" />
+                添加
+              </button>
+            </div>
+
+            {whitelistLoading ? (
+              <div className="flex items-center justify-center py-8 text-slate-500">
+                <Loader2 className="w-5 h-5 animate-spin mr-2" />
+                加载中...
+              </div>
+            ) : (
+              <div className="space-y-1.5 max-h-[400px] overflow-y-auto">
+                {whitelist.map((rule, idx) => (
+                  <div
+                    key={idx}
+                    className="flex items-center justify-between bg-slate-900/50 rounded-lg px-3 py-2 text-sm group"
+                  >
+                    <code className="text-slate-300 font-mono">{rule}</code>
+                    <button
+                      onClick={() => handleRemoveRule(idx)}
+                      className="opacity-0 group-hover:opacity-100 p-1 text-slate-500 hover:text-red-400 transition-all"
+                      title="删除"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+                {whitelist.length === 0 && (
+                  <div className="text-center py-8 text-slate-500 text-sm">白名单为空，Agent 将无法执行任何命令</div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="bg-slate-800/50 border border-slate-800 rounded-xl p-4">
+            <h3 className="font-medium text-slate-200 mb-3">系统默认白名单（参考）</h3>
+            <div className="flex flex-wrap gap-1.5">
+              {whitelistDefault.map((rule, idx) => (
+                <span
+                  key={idx}
+                  className={`text-xs px-2 py-1 rounded font-mono ${
+                    whitelist.includes(rule)
+                      ? 'bg-emerald-900/30 text-emerald-400'
+                      : 'bg-slate-900/50 text-slate-500'
+                  }`}
+                >
+                  {rule}
+                </span>
+              ))}
+            </div>
+          </div>
         </div>
       )}
 

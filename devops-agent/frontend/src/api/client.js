@@ -239,6 +239,17 @@ export const injectionScan = (text) =>
 
 export const injectionStats = () => request(`${API_BASE}/safety/injection/stats`)
 
+export const getExecutionWhitelist = () => request(`${API_BASE}/safety/whitelist`)
+
+export const updateExecutionWhitelist = (whitelist) =>
+  request(`${API_BASE}/safety/whitelist`, {
+    method: 'PUT',
+    body: JSON.stringify({ whitelist }),
+  })
+
+export const resetExecutionWhitelist = () =>
+  request(`${API_BASE}/safety/whitelist`, { method: 'DELETE' })
+
 // ============================================================
 //  系统配置（LLM 动态切换）
 // ============================================================

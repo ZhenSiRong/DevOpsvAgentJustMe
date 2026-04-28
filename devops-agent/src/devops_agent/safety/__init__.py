@@ -16,8 +16,11 @@ from .executor import (
     ExecutionResult,
     ExecutionRejectedError,
     execute,
+    execute_unrestricted,
     execute_safe,
     is_command_allowed,
+    get_execution_whitelist,
+    set_execution_whitelist,
     EXECUTION_WHITELIST,
 )
 from .config_guard import (
@@ -56,8 +59,11 @@ __all__ = [
     "ExecutionResult",
     "ExecutionRejectedError",
     "execute",
+    "execute_unrestricted",
     "execute_safe",
     "is_command_allowed",
+    "get_execution_whitelist",
+    "set_execution_whitelist",
     "EXECUTION_WHITELIST",
     # 配置写保护
     "ConfigGuard",

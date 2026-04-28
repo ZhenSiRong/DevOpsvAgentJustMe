@@ -367,3 +367,52 @@ async def api_safety_status() -> APIResponse:
         },
         "sudo_allowlist_count": len(DEFAULT_SUDO_ALLOWLIST),
     })
+
+
+# ============================================================
+#  3. 命令白名单管理（持久化到 configs 表）
+# ============================================================
+
+from ...safety.executor import (
+    get_execution_whitelist,
+    set_execution_whitelist,
+    EXECUTION_WHITELIST,
+)
+
+
+class WhitelistUpdateRequest(BaseModel):
+    whitelist: list[str] = Field(..., description="白名单命令前缀列表")
+
+
+@router.get("/whitelist", response_model=APIResponse, summary="获取 Agent 命令白名单")
+async def api_get_whitelist() -> APIResponse:
+    """获取当前生效的 Agent 命令白名单（从 configs 表读取，fallback 到默认值）。"""
+    dynamic = await get_execution_whitelist()
+    return APIResponse(data={
+        "whitelist": dynamic,
+        "is_custom": dynamic != EXECUTION_WHITELIST,
+        "default": EXECUTION_WHITELIST,
+        "count": len(dynamic),
+    })
+
+
+@router.put("/whitelist", response_model=APIResponse, summary="更新 Agent 命令白名单")
+async def api_update_whitelist(body: WhitelistUpdateRequest) -> APIResponse:
+    """更新 Agent 命令白名单（持久化到 configs 表）。运维者终端不受此白名单限制。"""
+    if not isinstance(body.whitelist, list):
+        raise HTTPException(status_code=422, detail="whitelist 必须是字符串数组")
+    for item in body.whitelist:
+        if not isinstance(item, str) or not item.strip():
+            raise HTTPException(status_code=422, detail="白名单条目必须是非空字符串")
+
+    await set_execution_whitelist(body.whitelist)
+    return APIResponse(data={"whitelist": body.whitelist, "count": len(body.whitelist)},
+                       message="白名单已更新")
+
+
+@router.delete("/whitelist", response_model=APIResponse, summary="重置为默认白名单")
+async def api_reset_whitelist() -> APIResponse:
+    """重置白名单为系统默认值。"""
+    await set_execution_whitelist(EXECUTION_WHITELIST)
+    return APIResponse(data={"whitelist": EXECUTION_WHITELIST, "count": len(EXECUTION_WHITELIST)},
+                       message="白名单已重置为默认值")
