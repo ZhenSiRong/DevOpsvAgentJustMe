@@ -6,6 +6,7 @@ import AuditPage from './pages/AuditPage'
 import SafetyPage from './pages/SafetyPage'
 import ReasoningPage from './pages/ReasoningPage'
 import SettingsPage from './pages/SettingsPage'
+import MCPPage from './pages/MCPPage'
 
 function App() {
   return (
@@ -17,6 +18,7 @@ function App() {
         <Route path="safety" element={<SafetyPage />} />
         <Route path="reasoning" element={<ReasoningPage />} />
         <Route path="settings" element={<SettingsPage />} />
+        <Route path="mcp" element={<MCPPage />} />
       </Route>
     </Routes>
   )

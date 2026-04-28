@@ -257,3 +257,36 @@ export const resetConfig = (key) =>
 
 export const resetAllLLMConfig = () =>
   request(`${API_BASE}/config/reset-all`, { method: 'POST' })
+
+// ============================================================
+//  MCP Server 管理
+// ============================================================
+export const listMCPServers = () => request(`${API_BASE}/mcp/servers`)
+
+export const getMCPServer = (id) => request(`${API_BASE}/mcp/servers/${encodeURIComponent(id)}`)
+
+export const createMCPServer = (payload) =>
+  request(`${API_BASE}/mcp/servers`, { method: 'POST', body: JSON.stringify(payload) })
+
+export const updateMCPServer = (id, payload) =>
+  request(`${API_BASE}/mcp/servers/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify(payload),
+  })
+
+export const deleteMCPServer = (id) =>
+  request(`${API_BASE}/mcp/servers/${encodeURIComponent(id)}`, { method: 'DELETE' })
+
+export const connectMCPServer = (id) =>
+  request(`${API_BASE}/mcp/servers/${encodeURIComponent(id)}/connect`, { method: 'POST' })
+
+export const disconnectMCPServer = (id) =>
+  request(`${API_BASE}/mcp/servers/${encodeURIComponent(id)}/disconnect`, { method: 'POST' })
+
+export const pingMCPServer = (id) =>
+  request(`${API_BASE}/mcp/servers/${encodeURIComponent(id)}/ping`, { method: 'POST' })
+
+export const getMCPServerTools = (id) =>
+  request(`${API_BASE}/mcp/servers/${encodeURIComponent(id)}/tools`)
+
+export const listConnectedMCPServers = () => request(`${API_BASE}/mcp/connected`)

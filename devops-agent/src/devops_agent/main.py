@@ -129,10 +129,19 @@ def create_app() -> FastAPI:
 
     # 挂载前端静态文件（如果存在）
     import os
+    from fastapi.responses import FileResponse
     static_dir = os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "dist")
     static_dir = os.path.abspath(static_dir)
     if os.path.isdir(static_dir):
-        app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
+        # SPA catch-all：API 路由优先匹配，未匹配的路径由这里处理
+        # 如果路径对应真实静态文件则直接返回，否则回退到 index.html
+        @app.get("/{full_path:path}")
+        async def serve_spa(full_path: str):
+            file_path = os.path.join(static_dir, full_path)
+            if os.path.isfile(file_path):
+                return FileResponse(file_path)
+            return FileResponse(os.path.join(static_dir, "index.html"))
+
         logger.info("前端静态文件已挂载: %s", static_dir)
     else:
         logger.warning("前端静态文件目录不存在: %s", static_dir)
