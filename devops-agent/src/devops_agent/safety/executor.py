@@ -76,6 +76,7 @@ DEFAULT_TIMEOUT_SECONDS = 30.0
 
 # 命令白名单 — 只允许这些基础命令模式被 Agent 执行
 # 每条是命令前缀匹配：如果 command 以白名单中的字符串开头则放行
+# 注意：不要加尾部空格，否则 "ls" 不带参数会匹配失败
 EXECUTION_WHITELIST: list[str] = [
     # 日志操作
     "logrotate",
@@ -86,18 +87,19 @@ EXECUTION_WHITELIST: list[str] = [
     "systemctl stop ",
     "systemctl status ",
     # 文件操作（只读 + 受限写操作）
-    "cat ", "ls ", "find ",
-    "head ", "tail ", "grep ", "wc ",
-    "sort ", "uniq ", "cut ", "awk ", "sed ",
-    "cp ", "mv ",
+    "cat", "ls", "find",
+    "head", "tail", "grep", "wc",
+    "sort", "uniq", "cut", "awk", "sed",
+    "cp", "mv",
     # 磁盘操作
-    "df ", "du ", "free ",
+    "df", "du", "free",
     # 进程查看
-    "ps ", "pgrep ", "pidstat ",
+    "ps", "pgrep", "pidstat",
+    "top", "htop",
     # 网络（只读）
-    "netstat ", "ss ", "ip addr ", "ip link ",
+    "netstat", "ss", "ip addr", "ip link",
     # DNS
-    "dig ", "nslookup ", "getent ",
+    "dig", "nslookup", "getent",
     # 清理操作（受限路径）
     "find /tmp -name",
     "find /var/tmp -name",
