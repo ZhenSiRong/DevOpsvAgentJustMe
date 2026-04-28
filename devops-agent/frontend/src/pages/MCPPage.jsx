@@ -283,8 +283,16 @@ export default function MCPPage() {
     // 依赖预检查
     const dep = _needsDependency(server)
     if (dep && envInfo) {
-      const depCheck = envInfo.dependencies?.find((d) => d.name === dep.type)
-      if (!depCheck?.available) {
+      // Python 特殊处理：同时检查 python3 和 python，任一可用即通过
+      let depAvailable = false
+      if (dep.type === 'python') {
+        depAvailable = envInfo.dependencies?.some(
+          (d) => (d.name === 'python3' || d.name === 'python') && d.available
+        )
+      } else {
+        depAvailable = envInfo.dependencies?.find((d) => d.name === dep.type)?.available
+      }
+      if (!depAvailable) {
         const ok = confirm(
           `⚠️ 依赖缺失\n\n该 MCP Server 需要 ${dep.name}，但当前环境未检测到。\n\n` +
           `在龙芯(loongarch64)架构下，${dep.name} 通常无预编译包，可能导致连接失败。\n\n` +
