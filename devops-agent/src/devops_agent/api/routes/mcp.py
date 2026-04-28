@@ -30,6 +30,7 @@ from ...db.mcp_servers import (
     toggle_mcp_server,
 )
 from ...tools.registry import get_registry
+from ..schemas import APIResponse
 
 logger = logging.getLogger(__name__)
 
@@ -59,12 +60,6 @@ class MCPServerUpdateRequest(BaseModel):
     env: dict[str, str] | None = None
     url: str | None = None
     cwd: str | None = None
-
-
-class APIResponse(BaseModel):
-    success: bool = True
-    data: Any | None = None
-    message: str = ""
 
 
 # ============================================================
