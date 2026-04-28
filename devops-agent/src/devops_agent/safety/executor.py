@@ -93,6 +93,8 @@ EXECUTION_WHITELIST: list[str] = [
     "cp", "mv",
     # 磁盘操作
     "df", "du", "free",
+    # 终端控制
+    "clear", "reset",
     # 进程查看
     "ps", "pgrep", "pidstat",
     "top", "htop",

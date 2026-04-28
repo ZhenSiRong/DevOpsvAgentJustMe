@@ -86,6 +86,7 @@ const TerminalPanel = forwardRef(function TerminalPanel({ visible, chatCollapsed
       rows: 24,
       cols: 80,
       allowProposedApi: true,
+      convertEol: true, // ← 将 \n 自动转为 \r\n，解决后端输出换行不对齐
     })
 
     const fitAddon = new FitAddon()

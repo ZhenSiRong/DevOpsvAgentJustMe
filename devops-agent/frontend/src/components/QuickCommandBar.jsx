@@ -26,7 +26,7 @@ const COMMAND_GROUPS = [
   {
     label: '进程网络',
     items: [
-      { label: 'ps', cmd: "ps aux --sort=-%mem | head -20", icon: Activity },
+      { label: 'ps', cmd: "ps aux | head -20", icon: Activity },
       { label: 'ss', cmd: 'ss -tunlp', icon: Network },
       { label: 'netstat', cmd: 'netstat -tunlp', icon: Globe },
       { label: 'lsof', cmd: 'lsof -i -P -n | head -20', icon: ShieldAlert },
