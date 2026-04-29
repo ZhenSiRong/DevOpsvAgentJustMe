@@ -668,6 +668,59 @@ POST /api/v1/tools/{id}/test
 {"arguments": {"service": "sshd"}}
 ```
 
+### 9.7 注册中心工具全景（内置 + 动态 + MCP）
+
+```
+GET /api/v1/tools/registry
+```
+
+列出 `ToolRegistry` 中所有已注册的工具，**按来源分类**（builtin / dynamic / mcp），供前端 MCP 管理页面展示。
+
+**响应 data：**
+
+```json
+{
+  "tools": [
+    {
+      "name": "probe.disk_usage",
+      "description": "获取指定路径的磁盘使用情况",
+      "is_builtin": true,
+      "source": "builtin",
+      "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}
+    },
+    {
+      "name": "get_current_time",
+      "description": "获取当前系统时间",
+      "is_builtin": false,
+      "source": "mcp",
+      "parameters": {"type": "object", "properties": {}, "additionalProperties": false}
+    }
+  ],
+  "total": 42,
+  "builtin_count": 38,
+  "dynamic_count": 0,
+  "mcp_count": 4
+}
+```
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `tools` | `array<RegistryToolItem>` | 全部已注册工具列表 |
+| `total` | `int` | 工具总数 |
+| `builtin_count` | `int` | 内置工具数（代码中注册的 ProbeTool） |
+| `dynamic_count` | `int` | 动态工具数（DB 加载的 DynamicMCPTool） |
+| `mcp_count` | `int` | MCP Server 工具数（外部 MCP 连接后注册的 ExternalMCPTool） |
+
+**RegistryToolItem 字段：**
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `name` | `string` | 工具名称（LLM function calling 用） |
+| `description` | `string` | 工具功能描述（给 LLM 看） |
+| `is_builtin` | `bool` | 是否为内置工具 |
+| `source` | `string` | 来源标识：`"builtin"` / `"dynamic"` / `"mcp"` |
+| `parameters` | `dict` | JSON Schema 参数定义 |
+
 ---
 
 ## 10. 审计日志
@@ -746,6 +799,7 @@ GET /api/v1/reasoning/{session_id}/summary
 | `POST /api/v1/execute` | 需求 4（最小权限执行） |
 | `GET /api/v1/audit/*` + `GET /api/v1/reasoning/*` | 需求 5（五段式闭环日志 + 审计） |
 | `GET/POST /api/v1/tools/*` | 需求 2（MCP 运维插件化） |
+| `GET /api/v1/tools/registry` | 需求 2（MCP 插件注册全景展示） |
 | `POST /api/v1/safety/injection/scan` | 需求 6（抗提示词注入） |
 | `POST /api/v1/safety/config/*` | 需求 3（关键配置写保护） |
 
@@ -800,6 +854,7 @@ POST   /api/v1/config/detect           自动探测协议
 
 # 动态工具
 GET    /api/v1/tools                   动态工具列表
+GET    /api/v1/tools/registry           注册中心工具全景（内置+动态+MCP）
 POST   /api/v1/tools                   注册动态工具
 GET    /api/v1/tools/{id}              工具详情
 PUT    /api/v1/tools/{id}              更新工具
@@ -817,4 +872,4 @@ GET    /api/v1/reasoning/{session_id}/summary 推理摘要
 
 ---
 
-> 最后更新：2026-04-27
+> 最后更新：2026-04-29

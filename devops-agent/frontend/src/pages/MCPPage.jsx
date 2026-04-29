@@ -37,6 +37,7 @@ import {
   listConnectedMCPServers,
   checkMCPEnv,
   importMCPServers,
+  listRegistryTools,
 } from '../api/client'
 
 const TRANSPORT_LABELS = {
@@ -68,6 +69,11 @@ export default function MCPPage() {
   const [jsonText, setJsonText] = useState('')
   const [importLoading, setImportLoading] = useState(false)
   const [importResult, setImportResult] = useState(null)
+
+  // 注册中心工具
+  const [registryTools, setRegistryTools] = useState([])
+  const [registryLoading, setRegistryLoading] = useState(false)
+  const [registryExpanded, setRegistryExpanded] = useState(false)
 
   const [form, setForm] = useState({
     id: '',
@@ -117,10 +123,25 @@ export default function MCPPage() {
     }
   }, [])
 
+  const loadRegistry = useCallback(async () => {
+    setRegistryLoading(true)
+    try {
+      const res = await listRegistryTools()
+      if (res.code === 0) {
+        setRegistryTools(res.data?.tools || [])
+      }
+    } catch (e) {
+      console.error('加载注册中心工具失败:', e)
+    } finally {
+      setRegistryLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
     loadData()
     loadEnv()
-  }, [loadData, loadEnv])
+    loadRegistry()
+  }, [loadData, loadEnv, loadRegistry])
 
   const isConnected = (serverId) =>
     connectedInfo.some((c) => c.id === serverId && c.connected)
@@ -496,6 +517,161 @@ export default function MCPPage() {
             )
           })}
         </div>
+      </div>
+
+      {/* 注册中心工具 */}
+      <div className="mb-4 bg-slate-900/60 border border-slate-800 rounded-xl overflow-hidden">
+        <button
+          onClick={() => setRegistryExpanded((v) => !v)}
+          className="w-full flex items-center justify-between px-4 py-3 hover:bg-slate-800/50 transition-colors"
+        >
+          <div className="flex items-center gap-2">
+            <Wrench className="w-4 h-4 text-primary-400" />
+            <span className="text-sm font-medium text-slate-200">注册中心工具</span>
+            {registryLoading ? (
+              <Loader2 className="w-3 h-3 animate-spin text-slate-500" />
+            ) : (
+              <span className="text-xs text-slate-500">
+                共 {registryTools.length} 个
+                {registryTools.length > 0 && (
+                  <>
+                    <span className="ml-1 text-emerald-400/80">
+                      内置 {registryTools.filter((t) => t.source === 'builtin').length}
+                    </span>
+                    <span className="ml-1 text-blue-400/80">
+                      MCP {registryTools.filter((t) => t.source === 'mcp').length}
+                    </span>
+                    <span className="ml-1 text-amber-400/80">
+                      动态 {registryTools.filter((t) => t.source === 'dynamic').length}
+                    </span>
+                  </>
+                )}
+              </span>
+            )}
+          </div>
+          {registryExpanded ? (
+            <ChevronDown className="w-4 h-4 text-slate-500" />
+          ) : (
+            <ChevronRight className="w-4 h-4 text-slate-500" />
+          )}
+        </button>
+
+        {registryExpanded && (
+          <div className="px-4 pb-4">
+            {registryLoading ? (
+              <div className="py-4 text-center text-xs text-slate-500">
+                <Loader2 className="w-4 h-4 animate-spin inline mr-1" />
+                加载中...
+              </div>
+            ) : registryTools.length === 0 ? (
+              <div className="py-4 text-center text-xs text-slate-600">暂无已注册工具</div>
+            ) : (
+              <div className="space-y-3">
+                {/* 内置工具 */}
+                {(() => {
+                  const builtins = registryTools.filter((t) => t.source === 'builtin')
+                  return builtins.length > 0 ? (
+                    <div>
+                      <div className="flex items-center gap-1.5 mb-1.5">
+                        <span className="text-xs font-medium text-emerald-400/90">内置工具</span>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-900/30 text-emerald-400/80 border border-emerald-800/30">
+                          {builtins.length}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2">
+                        {builtins.map((tool) => (
+                          <div
+                            key={tool.name}
+                            className="flex items-start gap-2 px-2.5 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg"
+                            title={tool.description}
+                          >
+                            <div className="mt-0.5 w-1.5 h-1.5 rounded-full bg-emerald-400/60 shrink-0" />
+                            <div className="min-w-0">
+                              <div className="text-xs font-medium text-slate-300 truncate">
+                                {tool.name}
+                              </div>
+                              <div className="text-[11px] text-slate-500 truncate leading-tight mt-0.5">
+                                {tool.description}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null
+                })()}
+
+                {/* MCP 工具 */}
+                {(() => {
+                  const mcps = registryTools.filter((t) => t.source === 'mcp')
+                  return mcps.length > 0 ? (
+                    <div>
+                      <div className="flex items-center gap-1.5 mb-1.5">
+                        <span className="text-xs font-medium text-blue-400/90">MCP 工具</span>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-900/30 text-blue-400/80 border border-blue-800/30">
+                          {mcps.length}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2">
+                        {mcps.map((tool) => (
+                          <div
+                            key={tool.name}
+                            className="flex items-start gap-2 px-2.5 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg"
+                            title={tool.description}
+                          >
+                            <div className="mt-0.5 w-1.5 h-1.5 rounded-full bg-blue-400/60 shrink-0" />
+                            <div className="min-w-0">
+                              <div className="text-xs font-medium text-slate-300 truncate">
+                                {tool.name}
+                              </div>
+                              <div className="text-[11px] text-slate-500 truncate leading-tight mt-0.5">
+                                {tool.description}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null
+                })()}
+
+                {/* 动态工具 */}
+                {(() => {
+                  const dynamics = registryTools.filter((t) => t.source === 'dynamic')
+                  return dynamics.length > 0 ? (
+                    <div>
+                      <div className="flex items-center gap-1.5 mb-1.5">
+                        <span className="text-xs font-medium text-amber-400/90">动态工具</span>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-900/30 text-amber-400/80 border border-amber-800/30">
+                          {dynamics.length}
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2">
+                        {dynamics.map((tool) => (
+                          <div
+                            key={tool.name}
+                            className="flex items-start gap-2 px-2.5 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg"
+                            title={tool.description}
+                          >
+                            <div className="mt-0.5 w-1.5 h-1.5 rounded-full bg-amber-400/60 shrink-0" />
+                            <div className="min-w-0">
+                              <div className="text-xs font-medium text-slate-300 truncate">
+                                {tool.name}
+                              </div>
+                              <div className="text-[11px] text-slate-500 truncate leading-tight mt-0.5">
+                                {tool.description}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null
+                })()}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Error banner */}

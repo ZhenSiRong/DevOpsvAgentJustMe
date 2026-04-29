@@ -304,6 +304,11 @@ export const listConnectedMCPServers = () => request(`${API_BASE}/mcp/connected`
 
 export const checkMCPEnv = () => request(`${API_BASE}/mcp/env-check`)
 
+// ============================================================
+//  注册中心工具（内置 + 动态 + MCP）
+// ============================================================
+export const listRegistryTools = () => request(`${API_BASE}/tools/registry`)
+
 export const importMCPServers = (jsonText) =>
   request(`${API_BASE}/mcp/servers/import`, {
     method: 'POST',

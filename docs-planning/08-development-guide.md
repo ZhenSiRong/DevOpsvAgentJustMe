@@ -2,7 +2,7 @@
 
 > DevOps Agent 后端开发规范与项目结构
 > 适用阶段：Phase 4（可靠性增强）
-> 最后更新：2026-04-27
+> 最后更新：2026-04-29
 
 ---
 
@@ -160,7 +160,8 @@ async def example() -> APIResponse:
 
 1. 继承 `MCPTool` 基类实现工具逻辑
 2. 在 `src/devops_agent/tools/registry.py` 中注册
-3. 前端 `Settings` 页面会自动展示内置工具列表
+3. 前端 MCP 管理页面（`MCPPage.jsx`）通过 `GET /api/v1/tools/registry` 展示所有已注册工具（内置 + 动态 + MCP），按来源分组显示
+4. 当前内置工具 38 个，覆盖系统监控、进程管理、网络诊断、日志分析、文件系统、服务管理、安全审计、硬件信息 8 大场景
 
 ---
 
