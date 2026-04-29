@@ -1,5 +1,11 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
-import { Send, Loader2, Bot, User, Sparkles, Terminal, AlertTriangle, MessageSquare, ChevronDown, ChevronRight, PanelRightOpen, PanelRightClose, PanelLeftOpen, PanelLeftClose, Network } from 'lucide-react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import {
+  Send, Loader2, Bot, User, Sparkles, Terminal, AlertTriangle, MessageSquare,
+  ChevronDown, ChevronRight, ChevronLeft, PanelRightOpen, PanelRightClose,
+  PanelLeftOpen, PanelLeftClose, Network,
+  Play, Eye, Brain, ListTodo, Wrench, FileText, CheckCircle2,
+  X, Clock, Zap, Layers,
+} from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { streamChatFetch, sendChat, listSessions, getSession, deleteSession } from '../api/client'
@@ -39,6 +45,583 @@ const EVENT_COLORS = {
   dag_node_start: 'text-orange-400',
   dag_node_done: 'text-emerald-400',
   dag_done: 'text-emerald-400',
+}
+
+// ============================================================
+//  阶段配置 — 用于流程图式推理链路分组
+// ============================================================
+const PHASE_CONFIG = {
+  startup: {
+    key: 'startup',
+    label: '启动',
+    icon: Play,
+    color: '#94a3b8',
+    bgClass: 'bg-slate-800/30',
+    borderClass: 'border-slate-700/50',
+    textClass: 'text-slate-400',
+    events: ['start'],
+  },
+  sense: {
+    key: 'sense',
+    label: '环境感知',
+    icon: Eye,
+    color: '#22d3ee',
+    bgClass: 'bg-cyan-900/15',
+    borderClass: 'border-cyan-800/30',
+    textClass: 'text-cyan-400',
+    events: ['sense'],
+  },
+  reasoning: {
+    key: 'reasoning',
+    label: '分析推理',
+    icon: Brain,
+    color: '#fbbf24',
+    bgClass: 'bg-amber-900/15',
+    borderClass: 'border-amber-800/30',
+    textClass: 'text-amber-400',
+    events: ['analyze'],
+  },
+  planning: {
+    key: 'planning',
+    label: '制定方案',
+    icon: ListTodo,
+    color: '#a78bfa',
+    bgClass: 'bg-violet-900/15',
+    borderClass: 'border-violet-800/30',
+    textClass: 'text-violet-400',
+    events: ['plan'],
+  },
+  execution: {
+    key: 'execution',
+    label: '执行工具',
+    icon: Wrench,
+    color: '#fb923c',
+    bgClass: 'bg-orange-900/15',
+    borderClass: 'border-orange-800/30',
+    textClass: 'text-orange-400',
+    events: ['execute', 'execute_done', 'dag_start', 'dag_layer_start', 'dag_node_start', 'dag_node_done', 'dag_done'],
+  },
+  output: {
+    key: 'output',
+    label: '生成回复',
+    icon: FileText,
+    color: '#60a5fa',
+    bgClass: 'bg-primary-900/15',
+    borderClass: 'border-primary-800/30',
+    textClass: 'text-primary-400',
+    events: ['output', 'done', 'error'],
+  },
+}
+
+const PHASE_ORDER = ['startup', 'sense', 'reasoning', 'planning', 'execution', 'output']
+
+/** 根据事件类型获取所属阶段 */
+function getPhaseKey(eventType) {
+  for (const [key, phase] of Object.entries(PHASE_CONFIG)) {
+    if (phase.events.includes(eventType)) return key
+  }
+  return 'execution' // 兜底
+}
+
+/** 格式化耗时 */
+function formatDurationMs(ms) {
+  if (!ms || ms < 0) return null
+  if (ms < 1000) return `${ms}ms`
+  return `${(ms / 1000).toFixed(2)}s`
+}
+
+// ============================================================
+//  推理链路 — 流程图式可视化组件
+// ============================================================
+
+function ReasoningFlowViewer({ events }) {
+  const [expandedPhases, setExpandedPhases] = useState(() => new Set(PHASE_ORDER))
+  const [selectedNode, setSelectedNode] = useState(null)
+  const [viewMode, setViewMode] = useState('flow') // flow | list
+
+  if (!events || events.length === 0) return null
+
+  // 按阶段分组 + execute/done 配对
+  const grouped = useMemo(() => {
+    const groups = {}
+    PHASE_ORDER.forEach(k => { groups[k] = [] })
+
+    const pairedEvents = []
+    const pendingExecutes = new Map() // tool_name → event
+
+    for (let i = 0; i < events.length; i++) {
+      const evt = events[i]
+      const type = evt.type
+
+      if (type === 'execute') {
+        pendingExecutes.set(evt.payload?.tool_name || `exec_${i}`, { ...evt, index: i })
+      } else if (type === 'execute_done') {
+        const toolName = evt.payload?.tool_name
+        const execEvt = pendingExecutes.get(toolName) || pendingExecutes.get(`exec_${i - 1}`)
+        if (execEvt) {
+          pairedEvents.push({
+            ...execEvt,
+            doneEvent: evt,
+            duration: evt.time - execEvt.time,
+            status: 'success',
+          })
+          pendingExecutes.delete(toolName)
+          pendingExecutes.delete(`exec_${i - 1}`)
+        } else {
+          pairedEvents.push({ ...evt, index: i })
+        }
+      } else {
+        // DAG 事件：尝试配对 node_start ↔ node_done
+        if (type === 'dag_node_start') {
+          const nodeId = evt.payload?.node_id || evt.payload?.task_id || `node_${i}`
+          pendingExecutes.set(`dag_${nodeId}`, { ...evt, index: i, isDAG: true })
+        } else if (type === 'dag_node_done') {
+          const nodeId = evt.payload?.node_id || evt.payload?.task_id
+          const dagStart = pendingExecutes.get(`dag_${nodeId}`) || pendingExecutes.get(`dag_node_${i - 1}`)
+          if (dagStart) {
+            pairedEvents.push({
+              ...dagStart,
+              doneEvent: evt,
+              duration: evt.time - dagStart.time,
+              isDAG: true,
+              status: evt.payload?.status || 'success',
+            })
+            pendingExecutes.delete(`dag_${nodeId}`)
+            pendingExecues.delete(`dag_node_${i - 1}`)
+          } else {
+            pairedEvents.push({ ...evt, index: i, isDAG: true })
+          }
+        } else {
+          // 其他事件直接加入（dag_start, dag_layer_start, dag_done 等）
+          pairedEvents.push({ ...evt, index: i, isDAG: type.startsWith('dag_') && type !== 'dag_node_start' && type !== 'dag_node_done' })
+        }
+      }
+    }
+
+    // 将未配对的 execute 也加入
+    pendingExecutes.forEach((v) => { pairedEvents.push(v) })
+
+    for (const pe of pairedEvents) {
+      const phaseKey = getPhaseKey(pe.type)
+      if (groups[phaseKey]) {
+        groups[phaseKey].push(pe)
+      } else {
+        groups.execution.push(pe)
+      }
+    }
+
+    return groups
+  }, [events])
+
+  const togglePhase = (key) => {
+    setExpandedPhases(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key); else next.add(key)
+      return next
+    })
+  }
+
+  const toggleExpandAll = () => {
+    const allExpanded = expandedPhases.size === PHASE_ORDER.length
+    setExpandedPhases(allExpanded ? new Set() : new Set(PHASE_ORDER))
+  }
+
+  // 计算总耗时
+  const totalDuration = events.length >= 2
+    ? events[events.length - 1].time - events[0].time
+    : null
+
+  return (
+    <div className="mt-1.5 group">
+      {/* 头部工具栏 */}
+      <div className="flex items-center gap-2 mb-2">
+        <button
+          onClick={toggleExpandAll}
+          className="flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer hover:text-slate-300 select-none transition-colors"
+        >
+          {expandedPhases.size === PHASE_ORDER.length ? (
+            <ChevronDown className="w-3.5 h-3.5" />
+          ) : (
+            <ChevronRight className="w-3.5 h-3.5" />
+          )}
+          <span className="font-medium">推理链路</span>
+        </button>
+        <span className="text-xs text-slate-600">({events.length} 事件)</span>
+        {totalDuration !== null && (
+          <span className="text-[10px] text-slate-600 font-mono ml-1">
+            ⏱ {formatDurationMs(totalDuration)}
+          </span>
+        )}
+        <div className="ml-auto flex items-center gap-1.5">
+          <button
+            onClick={() => setViewMode('flow')}
+            className={`p-1 rounded transition-colors ${viewMode === 'flow' ? 'bg-primary-900/30 text-primary-400' : 'text-slate-600 hover:text-slate-400'}`}
+            title="流程图视图"
+          >
+            <Layers className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={() => setViewMode('list')}
+            className={`p-1 rounded transition-colors ${viewMode === 'list' ? 'bg-primary-900/30 text-primary-400' : 'text-slate-600 hover:text-slate-400'}`}
+            title="列表视图"
+          >
+            <ListTodo className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+
+      {/* 流程图视图 */}
+      {viewMode === 'flow' ? (
+        <FlowTimelineView
+          grouped={grouped}
+          expandedPhases={expandedPhases}
+          onTogglePhase={togglePhase}
+          onSelectNode={setSelectedNode}
+        />
+      ) : (
+        <ListView events={events} onSelectNode={setSelectedNode} />
+      )}
+
+      {/* 节点详情侧滑面板 */}
+      {selectedNode && (
+        <NodeDetailPanel
+          node={selectedNode}
+          onClose={() => setSelectedNode(null)}
+        />
+      )}
+    </div>
+  )
+}
+
+// ============================================================
+//  流程图时间线子视图
+// ============================================================
+
+function FlowTimelineView({ grouped, expandedPhases, onTogglePhase, onSelectNode }) {
+  const hasContent = PHASE_ORDER.some(k => grouped[k]?.length > 0)
+
+  if (!hasContent) return null
+
+  let prevHasNext = false
+
+  return (
+    <div className="bg-slate-900/60 border border-slate-800 rounded-xl overflow-hidden">
+      <div className="relative pl-6 pr-3 py-2 space-y-0.5">
+        {/* 左侧竖线 */}
+        <div className="absolute left-[11px] top-2 bottom-2 w-[2px] bg-slate-700/50" />
+
+        {PHASE_ORDER.map((phaseKey, idx) => {
+          const phase = PHASE_CONFIG[phaseKey]
+          const phaseEvents = grouped[phaseKey] || []
+          if (phaseEvents.length === 0 && idx > 0) return null
+          const isExpanded = expandedPhases.has(phaseKey)
+          const hasNext = idx < PHASE_ORDER.length - 1 &&
+            PHASE_ORDER.slice(idx + 1).some(k => (grouped[k] || []).length > 0)
+          prevHasNext = hasNext
+          const PhaseIcon = phase.icon
+
+          return (
+            <div key={phaseKey}>
+              {/* 阶段标题 */}
+              <button
+                onClick={() => onTogglePhase(phaseKey)}
+                className="relative flex items-center gap-2 w-full py-1.5 hover:bg-slate-800/30 rounded-r-lg transition-colors group/phase"
+              >
+                {/* 时间线节点 */}
+                <div className="absolute -left-6 w-[22px] h-[22px] flex items-center justify-center">
+                  <div
+                    className="w-[10px] h-[10px] rounded-full ring-4 ring-slate-900"
+                    style={{ backgroundColor: phase.color }}
+                  />
+                </div>
+                {isExpanded ? (
+                  <ChevronDown className="w-3.5 h-3.5 text-slate-600" />
+                ) : (
+                  <ChevronRight className="w-3.5 h-3.5 text-slate-600" />
+                )}
+                <PhaseIcon className="w-3.5 h-3.5" style={{ color: phase.color }} />
+                <span className={`text-xs font-medium ${phase.textClass}`}>{phase.label}</span>
+                <span className="text-[10px] text-slate-600">({phaseEvents.length})</span>
+                {/* 阶段总耗时 */}
+                {phaseEvents.length >= 2 && (
+                  <span className="text-[10px] text-slate-600 font-mono ml-auto opacity-60">
+                    {formatDurationMs(phaseEvents[phaseEvents.length - 1].time - phaseEvents[0].time)}
+                  </span>
+                )}
+              </button>
+
+              {/* 展开的事件列表 */}
+              {isExpanded && phaseEvents.length > 0 && (
+                <div className="ml-5 pl-3 border-l border-slate-800/50 space-y-1 py-1">
+                  {phaseEvents.map((pevt, eIdx) => (
+                    <PhaseNodeItem
+                      key={`${pevt.type}-${pevt.index ?? eIdx}-${pevt.time}`}
+                      event={pevt}
+                      phaseColor={phase.color}
+                      onClick={() => onSelectNode(pevt)}
+                      isLast={eIdx === phaseEvents.length - 1 && !hasNext}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+// ============================================================
+//  单个节点卡片（流程图中的事件行）
+// ============================================================
+
+function PhaseNodeItem({ event, phaseColor, onClick, isLast }) {
+  const eventType = event.type
+  const payload = event.payload || {}
+  const isExecuteDone = eventType === 'execute_done'
+  const isPaired = !!event.doneEvent
+  const isDAGNode = event.isDAG && (eventType === 'dag_node_start' || (event.doneEvent && event.isDAG))
+
+  // 获取显示标签
+  const label = EVENT_LABELS[eventType] || eventType
+  const toolName = payload.tool_name || ''
+
+  // 状态颜色
+  let statusDot = phaseColor
+  if (isPaired || isExecuteDone) {
+    statusDot = event.status === 'success' ? '#34d399' :
+                 event.status === 'failed' ? '#f87171' : '#fbbf24'
+  }
+
+  // 耗时
+  const dur = event.duration || null
+
+  return (
+    <div
+      onClick={onClick}
+      className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg cursor-pointer
+        hover:bg-slate-800/60 border border-transparent hover:border-slate-700/50 transition-all group/node`}
+    >
+      {/* 状态点 */}
+      <div
+        className="w-2 h-2 rounded-full shrink-0 mt-0.5"
+        style={{ backgroundColor: statusDot }}
+      />
+
+      {/* 事件信息 */}
+      <div className="flex-1 min-w-0 flex items-center gap-1.5 flex-wrap">
+        <span className="text-[11px] font-medium whitespace-nowrap">{label}</span>
+
+        {toolName && (
+          <>
+            <span className="text-slate-600 text-[11px]">→</span>
+            <code className="text-[11px] font-mono text-emerald-300/90 bg-emerald-900/20 px-1.5 py-0.5 rounded">{toolName}</code>
+          </>
+        )}
+
+        {payload.reply_preview && (
+          <span className="text-[10px] text-slate-500 truncate max-w-[180px]" title={payload.reply_preview}>
+            {payload.reply_preview}
+          </span>
+        )}
+        {payload.detail && !payload.reply_preview && (
+          <span className="text-[10px] text-slate-500 truncate max-w-[180px]}" title={payload.detail}>
+            {payload.detail}
+          </span>
+        )}
+
+        {/* DAG 标签 */}
+        {(payload.execution_mode === 'dag_parallel' || event.isDAG) && (
+          <span className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded bg-primary-900/25 text-primary-400 border border-primary-800/20">
+            <Zap className="w-2.5 h-2.5" />DAG
+          </span>
+        )}
+
+        {/* 执行完成状态 */}
+        {(isPaired || isExecuteDone) && !event.isDAG && (
+          <CheckCircle2 className="w-3 h-3 text-emerald-400 shrink-0" />
+        )}
+      </div>
+
+      {/* 耗时 */}
+      {dur !== null && dur > 0 && (
+        <span className="text-[10px] text-slate-600 font-mono shrink-0">
+          {formatDurationMs(dur)}
+        </span>
+      )}
+
+      {/* 展开 hint */}
+      <ChevronRight className="w-3 h-3 text-slate-700 opacity-0 group-hover/node:opacity-100 shrink-0 transition-opacity" />
+    </div>
+  )
+}
+
+// ============================================================
+//  列表视图（紧凑模式）
+// ============================================================
+
+function ListView({ events, onSelectNode }) {
+  return (
+    <div className="bg-slate-900/60 border border-slate-800 rounded-lg overflow-hidden">
+      {events.map((evt, idx) => (
+        <div
+          key={evt.time + idx}
+          onClick={() => onSelectNode(evt)}
+          className="flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer hover:bg-slate-800/40 transition-colors border-b border-slate-800/30 last:border-b-0"
+        >
+          <span className={`font-medium shrink-0 ${EVENT_COLORS[evt.type] || 'text-slate-400'}`}>
+            {EVENT_LABELS[evt.type] || evt.type}
+          </span>
+          {evt.payload?.tool_name && (
+            <span className="text-slate-500 font-mono text-[11px]">{evt.payload.tool_name}</span>
+          )}
+          {evt.payload?.reply_preview && (
+            <span className="text-slate-500 truncate max-w-[200px] text-[11px]">
+              {evt.payload.reply_preview}
+            </span>
+          )}
+          {evt.payload?.detail && (
+            <span className="text-slate-500 truncate max-w-[200px] text-[11px]">
+              {evt.payload.detail}
+            </span>
+          )}
+          {evt.payload?.execution_mode === 'dag_parallel' && (
+            <span className="flex items-center gap-1 text-primary-400">
+              <Network className="w-3 h-3" />DAG
+            </span>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ============================================================
+//  节点详情侧滑面板
+// ============================================================
+
+function NodeDetailPanel({ node, onClose }) {
+  const payload = node.payload || {}
+  const donePayload = node.doneEvent?.payload || {}
+  const eventType = node.type
+  const phaseKey = getPhaseKey(eventType)
+  const phase = PHASE_CONFIG[phaseKey]
+  const PhaseIcon = phase?.icon || Zap
+  const label = EVENT_LABELS[eventType] || eventType
+
+  // 计算与上一个事件的间隔（如果有）
+  const duration = node.duration || null
+
+  return (
+    <div className="fixed inset-0 z-50 flex justify-end" onClick={onClose}>
+      {/* 遮罩 */}
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+
+      {/* 侧面板 */}
+      <div
+        className="relative w-full max-w-md bg-slate-900 border-l border-slate-700 shadow-2xl overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* 面板头部 */}
+        <div className="sticky top-0 bg-slate-900/95 backdrop-blur border-b border-slate-800 px-4 py-3 flex items-center justify-between z-10">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ backgroundColor: `${phase?.color || '#64748b'}20` }}>
+              <PhaseIcon className="w-4 h-4" style={{ color: phase?.color || '#94a3b8' }} />
+            </div>
+            <div className="min-w-0">
+              <div className="text-sm font-medium text-slate-200 truncate">{label}</div>
+              <div className="text-[11px] text-slate-500">{phase?.label || ''}{payload.tool_name ? ` · ${payload.tool_name}` : ''}</div>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors shrink-0"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* 面板内容 */}
+        <div className="p-4 space-y-4">
+          {/* 元数据卡片 */}
+          <div className="grid grid-cols-2 gap-2">
+            <MetaCard label="事件类型" value={eventType} mono />
+            {payload.tool_name && (
+              <MetaCard label="工具名称" value={payload.tool_name} mono />
+            )}
+            {duration != null && duration >= 0 && (
+              <MetaCard label="执行耗时" value={formatDurationMs(duration)} highlight />
+            )}
+            {payload.execution_mode && (
+              <MetaCard label="执行模式" value={
+                <span className="inline-flex items-center gap-1 text-primary-400">
+                  <Zap className="w-3 h-3" />{payload.execution_mode}
+                </span>
+              } />
+            )}
+            {payload.layer_idx != null && (
+              <MetaCard label="DAG 层级" value={`第 ${payload.layer_idx} 层`} mono />
+            )}
+            {node.isDAG && payload.node_id && (
+              <MetaCard label="节点 ID" value={payload.node_id.slice(0, 16)} mono />
+            )}
+            {node.status && (
+              <MetaCard label="状态" value={
+                <span className={
+                  node.status === 'success' ? 'text-emerald-400' :
+                  node.status === 'failed' ? 'text-red-400' : 'text-amber-400'
+                }>
+                  {node.status === 'success' ? '✓ 成功' : node.status === 'failed' ? '✕ 失败' : node.status}
+                </span>
+              } />
+            )}
+          </div>
+
+          {/* Payload 详情 */}
+          {Object.keys(payload).length > 0 && (
+            <div>
+              <h4 className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-2">请求 Payload</h4>
+              <pre className="bg-slate-950/80 border border-slate-800 rounded-lg p-3 text-[11px] text-slate-300 font-mono overflow-x-auto whitespace-pre-wrap break-all leading-relaxed">
+                {JSON.stringify(payload, null, 2)}
+              </pre>
+            </div>
+          )}
+
+          {/* Done Event（如果配对成功） */}
+          {node.doneEvent && Object.keys(donePayload).length > 0 && (
+            <div>
+              <h4 className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider mb-2">
+                响应结果
+                {donePayload.reply_preview && (
+                  <span className="normal-case tracking-normal text-emerald-400/70 ml-2 font-normal">
+                    ({donePayload.reply_preview})
+                  </span>
+                )}
+              </h4>
+              <pre className="bg-slate-950/80 border border-slate-800 rounded-lg p-3 text-[11px] text-slate-300 font-mono overflow-x-auto whitespace-pre-wrap break-all leading-relaxed">
+                {JSON.stringify(donePayload, null, 2)}
+              </pre>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** 元数据小卡片 */
+function MetaCard({ label, value, mono = false, highlight = false }) {
+  return (
+    <div className="bg-slate-800/50 border border-slate-800/50 rounded-lg p-2">
+      <div className="text-[10px] text-slate-500 mb-0.5">{label}</div>
+      <div className={`text-xs font-medium ${mono ? 'font-mono' : ''} ${
+        highlight ? 'text-primary-300' : 'text-slate-200'
+      }`}>
+        {value}
+      </div>
+    </div>
+  )
 }
 
 export default function ChatPage() {
@@ -473,44 +1056,9 @@ export default function ChatPage() {
                     return msg.content
                   })()}
                 </div>
-                {/* 推理链路折叠面板（仅 assistant 消息） */}
+                {/* 推理链路流程图（仅 assistant 消息） */}
                 {msg.role === 'assistant' && msg.reasoningEvents && msg.reasoningEvents.length > 0 && (
-                  <details className="mt-1.5 group">
-                    <summary className="flex items-center gap-1 text-xs text-slate-500 cursor-pointer hover:text-slate-300 select-none list-none">
-                      <ChevronRight className="w-3 h-3 group-open:hidden" />
-                      <ChevronDown className="w-3 h-3 hidden group-open:inline" />
-                      <span>推理链路</span>
-                      <span className="text-slate-600">({msg.reasoningEvents.length} 事件)</span>
-                    </summary>
-                    <div className="mt-1.5 bg-slate-900/60 border border-slate-800 rounded-lg px-3 py-2 space-y-1">
-                      {msg.reasoningEvents.map((evt, idx) => (
-                        <div key={evt.time + idx} className="flex items-center gap-2 text-xs">
-                          <span className={`font-medium shrink-0 ${EVENT_COLORS[evt.type] || 'text-slate-400'}`}>
-                            {EVENT_LABELS[evt.type] || evt.type}
-                          </span>
-                          {evt.payload?.tool_name && (
-                            <span className="text-slate-500 font-mono">{evt.payload.tool_name}</span>
-                          )}
-                          {evt.payload?.reply_preview && (
-                            <span className="text-slate-500 truncate max-w-[200px]">
-                              {evt.payload.reply_preview}
-                            </span>
-                          )}
-                          {evt.payload?.detail && (
-                            <span className="text-slate-500 truncate max-w-[200px]">
-                              {evt.payload.detail}
-                            </span>
-                          )}
-                          {evt.payload?.execution_mode === 'dag_parallel' && (
-                            <span className="flex items-center gap-1 text-primary-400">
-                              <Network className="w-3 h-3" />
-                              DAG
-                            </span>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </details>
+                  <ReasoningFlowViewer events={msg.reasoningEvents} />
                 )}
               </div>
               {msg.role === 'user' && (
@@ -536,29 +1084,50 @@ export default function ChatPage() {
                   </span>
                 </div>
 
-                {/* 推理事件时间线 */}
-                <div className="space-y-1.5">
-                  {streamEvents.slice(-6).map((evt, idx) => (
-                    <div key={evt.time + idx} className="flex items-center gap-2 text-xs">
-                      <span className={`font-medium ${EVENT_COLORS[evt.type] || 'text-slate-400'}`}>
-                        {EVENT_LABELS[evt.type] || evt.type}
-                      </span>
-                      {evt.payload?.tool_name && (
-                        <span className="text-slate-500 font-mono">{evt.payload.tool_name}</span>
-                      )}
-                      {evt.payload?.reply_preview && (
-                        <span className="text-slate-500 truncate max-w-[200px]">
-                          {evt.payload.reply_preview}
-                        </span>
-                      )}
-                      {evt.payload?.execution_mode === 'dag_parallel' && (
-                        <span className="flex items-center gap-1 text-primary-400">
-                          <Network className="w-3 h-3" />
-                          DAG
-                        </span>
-                      )}
-                    </div>
-                  ))}
+                {/* 推理事件时间线 — 带阶段分组 */}
+                <div className="space-y-2">
+                  {(() => {
+                    // 按阶段分组最近的流式事件
+                    const recent = streamEvents.slice(-12)
+                    const phaseGroups = { startup: [], sense: [], reasoning: [], planning: [], execution: [], output: [] }
+                    recent.forEach(evt => {
+                      const pk = getPhaseKey(evt.type)
+                      if (phaseGroups[pk]) phaseGroups[pk].push(evt)
+                      else phaseGroups.execution.push(evt)
+                    })
+
+                    return PHASE_ORDER.map(pk => {
+                      const evts = phaseGroups[pk]
+                      if (evts.length === 0) return null
+                      const phase = PHASE_CONFIG[pk]
+                      const PIcon = phase.icon
+                      return (
+                        <div key={pk} className="flex items-start gap-1.5">
+                          <PIcon className="w-3 h-3 mt-0.5 shrink-0" style={{ color: phase.color, opacity: 0.7 }} />
+                          <div className="flex-1 space-y-0.5">
+                            {evts.map((evt, idx) => (
+                              <div key={evt.time + idx} className="flex items-center gap-1.5 text-[11px]">
+                                <span className={`font-medium shrink-0 ${EVENT_COLORS[evt.type] || 'text-slate-400'}`}>
+                                  {EVENT_LABELS[evt.type] || evt.type}
+                                </span>
+                                {evt.payload?.tool_name && (
+                                  <code className="font-mono text-emerald-300/80 bg-emerald-900/15 px-1 py-px rounded text-[10px]">{evt.payload.tool_name}</code>
+                                )}
+                                {evt.payload?.reply_preview && (
+                                  <span className="text-slate-500 truncate max-w-[160px] text-[10px]">{evt.payload.reply_preview}</span>
+                                )}
+                                {(evt.payload?.execution_mode === 'dag_parallel' || evt.type?.startsWith('dag_')) && (
+                                  <span className="inline-flex items-center gap-0.5 text-[9px] font-medium px-1 py-px rounded bg-primary-900/20 text-primary-400 border border-primary-800/20">
+                                    <Zap className="w-2.5 h-2.5" />DAG
+                                  </span>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )
+                    })
+                  })()}
                 </div>
               </div>
             </div>
