@@ -152,6 +152,13 @@ class ChatRequest(BaseModel):
     context: dict[str, Any] | None = Field(default=None, description="附加上下文")
 
 
+class RetryRequest(BaseModel):
+    """回复重试请求"""
+    session_id: str = Field(..., description="会话 ID")
+    message_id: str | None = Field(default=None, description="原助手消息 ID（可选，用于定位重试目标）")
+    round_number: int | None = Field(default=None, description="原消息轮次号")
+
+
 class ChatResponse(BaseModel):
     """对话响应"""
     session_id: str = ""

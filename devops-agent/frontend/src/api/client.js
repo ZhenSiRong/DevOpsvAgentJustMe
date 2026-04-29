@@ -142,6 +142,56 @@ export const getChatHistory = (sessionId, page = 1, pageSize = 50) =>
   request(`${API_BASE}/chat/history?session_id=${sessionId}&page=${page}&page_size=${pageSize}`)
 
 // ============================================================
+//  回复重试
+// ============================================================
+export async function retryMessage(sessionId, onEvent) {
+  const response = await fetch(`${API_BASE}/chat/retry`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId }),
+  })
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}))
+    throw new Error(err.detail || `HTTP ${response.status}`)
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+
+    let currentEvent = null
+    let currentData = null
+
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (trimmed.startsWith('event:')) {
+        currentEvent = trimmed.slice(6).trim()
+      } else if (trimmed.startsWith('data:')) {
+        currentData = trimmed.slice(5).trim()
+      } else if (trimmed === '' && currentEvent && currentData) {
+        try {
+          const payload = JSON.parse(currentData)
+          onEvent(currentEvent, payload)
+        } catch (e) {
+          onEvent(currentEvent, { raw: currentData })
+        }
+        currentEvent = null
+        currentData = null
+      }
+    }
+  }
+}
+
+// ============================================================
 //  OS 探针
 // ============================================================
 export const probeDisk = (path = '/var/log') =>

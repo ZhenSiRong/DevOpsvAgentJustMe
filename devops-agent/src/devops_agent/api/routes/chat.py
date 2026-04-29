@@ -23,7 +23,7 @@ from fastapi.responses import StreamingResponse
 
 from ...agent import run_agent, run_agent_stream, save_session_history, load_session_history
 from ...db import get_session, create_session, append_message, touch_session, get_messages_by_session
-from ..schemas import APIResponse, ChatRequest, ChatResponse
+from ..schemas import APIResponse, ChatRequest, ChatResponse, RetryRequest
 
 logger = logging.getLogger(__name__)
 
@@ -200,6 +200,97 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",  # 禁用 Nginx 缓冲
+        },
+    )
+
+
+@router.post("/chat/retry", summary="重新生成回复（SSE 流式）")
+async def chat_retry(body: RetryRequest) -> StreamingResponse:
+    """
+    对指定会话的最后一条用户消息重新执行 Agent 推理，生成新版本回复。
+
+    流程：
+    1. 加载会话历史消息
+    2. 找到最后一条 user 消息作为重试输入
+    3. 调用 run_agent_stream 重新推理（自动产生新的 round_number）
+    4. 新的 assistant 消息追加到 DB（append-only，旧消息保留）
+    5. SSE 流式返回推理过程 + 新回复
+    """
+    session_id = body.session_id
+
+    # 验证会话存在
+    existing = await get_session(session_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"会话 {session_id} 不存在")
+
+    # 加载会话全部消息
+    all_messages = await get_messages_by_session(session_id, page=1, page_size=1000)
+    if not all_messages:
+        raise HTTPException(status_code=400, detail="会话中没有消息，无法重试")
+
+    # 找到最后一条 user 消息
+    last_user_msg = None
+    for msg in reversed(all_messages):
+        if msg.role == "user":
+            last_user_msg = msg
+            break
+
+    if not last_user_msg:
+        raise HTTPException(status_code=400, detail="没有找到用户消息，无法重试")
+
+    # 构建历史上下文（重试消息之前的历史，不含之前的 assistant 回复）
+    # 策略：取最后一条 user 消息之前的所有消息作为 history
+    retry_input = last_user_msg.content
+
+    # 加载 LLM 需要的历史格式
+    history = await load_session_history(session_id)
+
+    async def retry_event_generator():
+        """重试 SSE 事件生成器"""
+        import json as _json
+
+        full_reply = ""
+        session_id_final = session_id
+
+        try:
+            async for event in run_agent_stream(
+                user_input=retry_input,
+                session_id=session_id,
+                history=history,
+            ):
+                event_type = event.get("event", "unknown")
+                # 标记为重试事件，前端可据此区分
+                event["retry"] = True
+                yield f"event: {event_type}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+                if event_type == "output":
+                    full_reply = event.get("reply", "")
+                    session_id_final = event.get("session_id", session_id)
+
+                if event_type == "done":
+                    session_id_final = event.get("session_id", session_id)
+
+        except Exception as e:
+            logger.error("重试对话异常: %s", e, exc_info=True)
+            error_event = {"event": "error", "detail": f"{type(e).__name__}: {e}", "retry": True}
+            yield f"event: error\ndata: {json.dumps(error_event, ensure_ascii=False)}\n\n"
+            return
+
+        # 保存新的助手回复到 DB
+        try:
+            if full_reply:
+                await append_message(session_id=session_id_final, role="assistant", content=full_reply)
+            await touch_session(session_id_final)
+        except Exception as db_err:
+            logger.warning("重试后保存助手回复失败: %s", db_err)
+
+    return StreamingResponse(
+        retry_event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
         },
     )
 

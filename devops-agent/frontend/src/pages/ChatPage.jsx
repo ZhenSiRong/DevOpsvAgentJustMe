@@ -4,11 +4,11 @@ import {
   ChevronDown, ChevronRight, ChevronLeft, PanelRightOpen, PanelRightClose,
   PanelLeftOpen, PanelLeftClose, Network,
   Play, Eye, Brain, ListTodo, Wrench, FileText, CheckCircle2,
-  X, Clock, Zap, Layers,
+  X, Clock, Zap, Layers, RefreshCw, GitCompareArrows, ArrowRightLeft, Copy,
 } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { streamChatFetch, sendChat, listSessions, getSession, deleteSession } from '../api/client'
+import { streamChatFetch, sendChat, listSessions, getSession, deleteSession, retryMessage } from '../api/client'
 import TerminalPanel from '../components/TerminalPanel'
 import QuickCommandBar from '../components/QuickCommandBar'
 import { PanelGroup, Panel, PanelResizeHandle } from 'react-resizable-panels'
@@ -624,6 +624,170 @@ function MetaCard({ label, value, mono = false, highlight = false }) {
   )
 }
 
+// ============================================================
+//  回复重试 + 版本对比组件
+// ============================================================
+
+/**
+ * DiffViewer — 左右分栏对比两个版本的回复
+ * 简单的行级 diff 高亮（纯前端，无额外依赖）
+ */
+function DiffViewer({ original, revised, onClose }) {
+  const originalLines = original ? original.split('\n') : ['(空)']
+  const revisedLines = revised ? revised.split('\n') : ['(空)']
+
+  // 简单逐行 diff 标记
+  const diffResult = useMemo(() => {
+    const origLines = [...originalLines]
+    const revLines = [...revisedLines]
+    const maxLen = Math.max(origLines.length, revLines.length)
+    const result = []
+
+    for (let i = 0; i < maxLen; i++) {
+      const oLine = origLines[i]
+      const rLine = revLines[i]
+      if (i >= origLines.length) {
+        result.push({ type: 'add', num: i + 1, original: null, revised: rLine })
+      } else if (i >= revLines.length) {
+        result.push({ type: 'remove', num: i + 1, original: oLine, revised: null })
+      } else if (oLine === rLine) {
+        result.push({ type: 'same', num: i + 1, original: oLine, revised: rLine })
+      } else {
+        result.push({ type: 'change', num: i + 1, original: oLine, revised: rLine })
+      }
+    }
+    return result
+  }, [originalLines, revisedLines])
+
+  const copyToClipboard = (text) => {
+    navigator.clipboard?.writeText(text || '')
+  }
+
+  return (
+    <div className="mt-2 border border-slate-700/60 rounded-xl overflow-hidden">
+      {/* 头部 */}
+      <div className="flex items-center justify-between px-3 py-2 bg-slate-800/80 border-b border-slate-700/50">
+        <div className="flex items-center gap-2 text-xs font-medium text-slate-300">
+          <GitCompareArrows className="w-3.5 h-3.5 text-primary-400" />
+          <span>版本对比</span>
+          <span className="text-[10px] text-slate-500 font-normal">
+            ({diffResult.filter(d => d.type !== 'same').length} 处差异)
+          </span>
+        </div>
+        <button
+          onClick={onClose}
+          className="p-1 rounded hover:bg-slate-700 text-slate-400 hover:text-slate-200 transition-colors"
+        >
+          <X className="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      {/* 对比区域：左右分栏 */}
+      <div className="grid grid-cols-2 divide-x divide-slate-700/50">
+        {/* 原版本（左侧） */}
+        <div className="bg-slate-900/40">
+          <div className="sticky top-0 px-3 py-1.5 bg-red-950/20 border-b border-slate-800/50 text-[11px] font-medium text-red-400 flex items-center gap-1">
+            <span>原版本</span>
+          </div>
+          <div className="max-h-[360px] overflow-y-auto text-[11px] font-mono leading-relaxed">
+            {diffResult.map((d, idx) => (
+              <div
+                key={idx}
+                className={`flex px-3 py-0.5 ${
+                  d.type === 'remove' ? 'bg-red-900/15 text-red-300' :
+                  d.type === 'change' ? 'bg-amber-900/10 text-amber-200/80' :
+                  'text-slate-500'
+                }`}
+              >
+                <span className="w-6 shrink-0 text-right opacity-40 mr-2 select-none">{d.num}</span>
+                <span className="break-all whitespace-pre-wrap min-w-0">
+                  {d.original || <span className="text-slate-600 italic">(空)</span>}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* 新版本（右侧） */}
+        <div className="bg-slate-900/40">
+          <div className="sticky top-0 px-3 py-1.5 bg-emerald-950/20 border-b border-slate-800/50 text-[11px] font-medium text-emerald-400 flex items-center gap-1">
+            <span>新版本</span>
+            <button
+              onClick={() => copyToClipboard(revised)}
+              className="ml-auto p-0.5 rounded hover:bg-slate-700 text-slate-500 hover:text-slate-300"
+              title="复制新版本"
+            >
+              <Copy className="w-3 h-3" />
+            </button>
+          </div>
+          <div className="max-h-[360px] overflow-y-auto text-[11px] font-mono leading-relaxed">
+            {diffResult.map((d, idx) => (
+              <div
+                key={idx}
+                className={`flex px-3 py-0.5 ${
+                  d.type === 'add' ? 'bg-emerald-900/15 text-emerald-300' :
+                  d.type === 'change' ? 'bg-amber-900/10 text-amber-200/80' :
+                  'text-slate-500'
+                }`}
+              >
+                <span className="w-6 shrink-0 text-right opacity-40 mr-2 select-none">{d.num}</span>
+                <span className="break-all whitespace-pre-wrap min-w-0">
+                  {d.revised || <span className="text-slate-600 italic">(空)</span>}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * MessageActions — 单条 assistant 消息的操作栏
+ */
+function MessageActions({ msgIndex, msg, onRetry, hasVersions, onCompare }) {
+  return (
+    <div className="flex items-center gap-1.5 mt-1 opacity-0 group-hover/msg:opacity-100 transition-opacity duration-200">
+      {/* 重新生成按钮 */}
+      <button
+        onClick={(e) => { e.stopPropagation(); onRetry(msgIndex) }}
+        disabled={msg._isRetrying}
+        className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium
+                     text-slate-400 hover:text-primary-300 hover:bg-primary-900/20
+                     border border-transparent hover:border-primary-800/30
+                     transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        title="重新生成回复"
+      >
+        {msg._isRetrying ? (
+          <Loader2 className="w-3 h-3 animate-spin" />
+        ) : (
+          <RefreshCw className="w-3 h-3" />
+        )}
+        <span>重新生成</span>
+      </button>
+
+      {/* 版本对比入口 */}
+      {hasVersions && (
+        <>
+          <span className="text-slate-700">|</span>
+          <button
+            onClick={(e) => { e.stopPropagation(); onCompare(msg.id) }}
+            className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium
+                     text-amber-400/70 hover:text-amber-300 hover:bg-amber-900/15
+                     border border-amber-800/20 hover:border-amber-700/30
+                     transition-colors"
+            title="对比不同版本的回复"
+          >
+            <ArrowRightLeft className="w-3 h-3" />
+            <span>对比版本</span>
+          </button>
+        </>
+      )}
+    </div>
+  )
+}
+
 export default function ChatPage() {
   const [sessions, setSessions] = useState([])
   const [currentSessionId, setCurrentSessionId] = useState(null)
@@ -632,6 +796,9 @@ export default function ChatPage() {
   const [isStreaming, setIsStreaming] = useState(false)
   const [streamEvents, setStreamEvents] = useState([])
   const [activeEvent, setActiveEvent] = useState(null)
+  // ---- 回复重试相关 state ----
+  const [messageVersions, setMessageVersions] = useState(() => new Map()) // msgId → [{content, reasoningEvents, timestamp}]
+  const [comparingMsgId, setComparingMsgId] = useState(null) // 当前正在对比的消息 ID
   const messagesEndRef = useRef(null)
   const inputRef = useRef(null)
   const terminalRef = useRef(null)
@@ -789,6 +956,94 @@ export default function ChatPage() {
     const d = new Date(iso)
     return d.toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
   }
+
+  // ---- 回复重试处理 ----
+  const handleRetry = useCallback(async (msgIndex) => {
+    if (!currentSessionId || isStreaming) return
+
+    // 找到要重试的消息（必须是 assistant 消息）
+    const targetMsg = messages[msgIndex]
+    if (!targetMsg || targetMsg.role !== 'assistant') return
+
+    // 标记正在重试
+    setMessages(prev => prev.map((m, i) =>
+      i === msgIndex ? { ...m, _isRetrying: true } : m
+    ))
+    setIsStreaming(true)
+    setStreamEvents([])
+    setActiveEvent('start')
+
+    let retryReply = ''
+    let retryError = null
+    const retryEvents = []
+
+    try {
+      await retryMessage(currentSessionId, (eventType, payload) => {
+        setActiveEvent(eventType)
+        const evt = { type: eventType, payload, time: Date.now() }
+        setStreamEvents(prev => [...prev, evt])
+        retryEvents.push(evt)
+
+        if (eventType === 'output') {
+          retryReply = payload.reply || ''
+        }
+        if (eventType === 'error') {
+          retryError = payload.detail || payload.message || '未知错误'
+        }
+      })
+
+      // 将原消息保存到版本历史中
+      setMessageVersions(prev => {
+        const next = new Map(prev)
+        const existing = next.get(targetMsg.id) || []
+        // 只在第一次重试时保存原始版本
+        if (existing.length === 0) {
+          existing.unshift({
+            content: targetMsg.content,
+            reasoningEvents: targetMsg.reasoningEvents ? [...targetMsg.reasoningEvents] : undefined,
+            timestamp: Date.now(),
+            label: 'v1 原版',
+          })
+        }
+        // 添加新版本
+        existing.push({
+          content: retryReply || '(空回复)',
+          reasoningEvents: retryEvents.length > 0 ? [...retryEvents] : undefined,
+          timestamp: Date.now(),
+          label: `v${existing.length + 1} 重试`,
+        })
+        next.set(targetMsg.id, existing)
+        return next
+      })
+
+      // 替换当前消息内容为最新版本
+      setMessages(prev => prev.map((m, i) => {
+        if (i !== msgIndex) return m
+        return {
+          ...m,
+          content: retryReply || `❌ 重试异常: ${retryError}`,
+          isError: !!retryError && !retryReply,
+          reasoningEvents: retryEvents.length > 0 ? [...retryEvents] : m.reasoningEvents,
+          _isRetrying: false,
+          _retryCount: (m._retryCount || 0) + 1,
+        }
+      }))
+
+    } catch (err) {
+      setMessages(prev => prev.map((m, i) =>
+        i === msgIndex ? { ...m, _isRetrying: false } : m
+      ))
+      console.error('重试失败:', err)
+    } finally {
+      setIsStreaming(false)
+      setActiveEvent(null)
+    }
+  }, [currentSessionId, isStreaming, messages])
+
+  /** 切换对比面板 */
+  const handleCompare = useCallback((msgId) => {
+    setComparingMsgId(prev => prev === msgId ? null : msgId)
+  }, [])
 
   // 提取 <think> 思考块
   function parseThinkBlock(content) {
@@ -1007,10 +1262,15 @@ export default function ChatPage() {
             </div>
           )}
 
-          {messages.map((msg) => (
+          {messages.map((msg, msgIndex) => {
+            const versions = messageVersions.get(msg.id)
+            const hasMultipleVersions = versions && versions.length > 1
+            const isComparing = comparingMsgId === msg.id
+
+            return (
             <div
               key={msg.id}
-              className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+              className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'} ${msg.role === 'assistant' ? 'group/msg' : ''}`}
             >
               {msg.role === 'assistant' && (
                 <div className="w-8 h-8 rounded-lg bg-primary-900/50 border border-primary-800/50 flex items-center justify-center shrink-0">
@@ -1018,6 +1278,20 @@ export default function ChatPage() {
                 </div>
               )}
               <div className="max-w-[85%] sm:max-w-[75%]">
+                {/* 版本标签（有多个版本时显示） */}
+                {hasMultipleVersions && !isComparing && (
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-900/20 text-amber-400/80 border border-amber-800/20">
+                      v{versions.length} · 已重试 {(versions.length - 1)} 次
+                    </span>
+                    <button
+                      onClick={() => handleCompare(msg.id)}
+                      className="text-[10px] text-slate-500 hover:text-amber-400 transition-colors"
+                    >
+                      查看对比 →
+                    </button>
+                  </div>
+                )}
                 <div
                   className={`
                     rounded-2xl px-4 py-3 text-sm leading-relaxed
@@ -1060,6 +1334,58 @@ export default function ChatPage() {
                 {msg.role === 'assistant' && msg.reasoningEvents && msg.reasoningEvents.length > 0 && (
                   <ReasoningFlowViewer events={msg.reasoningEvents} />
                 )}
+                {/* 操作栏：重试按钮 + 版本对比 */}
+                {msg.role === 'assistant' && !isStreaming && (
+                  <MessageActions
+                    msgIndex={msgIndex}
+                    msg={msg}
+                    onRetry={handleRetry}
+                    hasVersions={hasMultipleVersions}
+                    onCompare={handleCompare}
+                  />
+                )}
+                {/* 对比面板（内联展开） */}
+                {isComparing && hasMultipleVersions && (
+                  <div className="mt-2 space-y-2">
+                    {/* 版本选择 Tab */}
+                    <div className="flex items-center gap-1.5">
+                      {versions.map((v, vi) => (
+                        <button
+                          key={vi}
+                          onClick={() => {
+                            // 切换显示版本内容
+                            setMessages(prev => prev.map((m) =>
+                              m.id === msg.id
+                                ? { ...m, content: v.content, reasoningEvents: v.reasoningEvents }
+                                : m
+                            ))
+                          }}
+                          className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors ${
+                            vi === versions.length - 1
+                              ? 'bg-emerald-900/25 text-emerald-400 border border-emerald-800/30'
+                              : 'bg-slate-800 text-slate-400 border border-slate-700/50 hover:border-slate-600'
+                          }`}
+                        >
+                          {v.label || `v${vi + 1}`}
+                        </button>
+                      ))}
+                      <span className="text-slate-700 mx-0.5">vs</span>
+                    </div>
+                    {/* Diff 对比视图 — 显示最新版 vs 原版 */}
+                    {(() => {
+                      if (versions.length < 2) return null
+                      const orig = versions[0]
+                      const latest = versions[versions.length - 1]
+                      return (
+                        <DiffViewer
+                          original={orig.content}
+                          revised={latest.content}
+                          onClose={() => setComparingMsgId(null)}
+                        />
+                      )
+                    })()}
+                  </div>
+                )}
               </div>
               {msg.role === 'user' && (
                 <div className="w-8 h-8 rounded-lg bg-slate-700 flex items-center justify-center shrink-0">
@@ -1067,7 +1393,8 @@ export default function ChatPage() {
                 </div>
               )}
             </div>
-          ))}
+            )
+          })}
 
           {/* 流式推理进度 */}
           {isStreaming && (
