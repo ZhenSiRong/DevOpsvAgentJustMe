@@ -12,6 +12,7 @@ import {
   PanelLeftOpen,
   PanelLeftClose,
   Plug,
+  Network,
 } from 'lucide-react'
 import { useState } from 'react'
 
@@ -21,6 +22,7 @@ const navItems = [
   { path: '/safety', label: '安全中心', icon: Shield },
   { path: '/audit', label: '审计日志', icon: ClipboardList },
   { path: '/reasoning', label: '推理链路', icon: GitBranch },
+  { path: '/orchestrator', label: '任务编排', icon: Network },
   { path: '/mcp', label: 'MCP 管理', icon: Plug },
   { path: '/settings', label: '系统设置', icon: Settings },
 ]

@@ -113,7 +113,7 @@ def create_app() -> FastAPI:
     # ============================================================
     #  注册路由模块（Day 4 完成 — 8 个路由端点 + Day 5 动态工具）
     # ============================================================
-    from .api.routes import health, probe, execute, chat, sessions, audit, reasoning, safety, tools, config, mcp
+    from .api.routes import health, probe, execute, chat, sessions, audit, reasoning, safety, tools, config, mcp, orchestrator
 
     app.include_router(health.router)          # /health, /api/v1/info
     app.include_router(probe.router)            # /api/v1/probe/*
@@ -126,6 +126,7 @@ def create_app() -> FastAPI:
     app.include_router(tools.router)            # /api/v1/tools/* (动态工具)
     app.include_router(config.router)           # /api/v1/config/* (系统配置)
     app.include_router(mcp.router)              # /api/v1/mcp/* (MCP Server 管理)
+    app.include_router(orchestrator.router)     # /api/v1/orchestrator/* (DAG 编排引擎)
 
     # 挂载前端静态文件（如果存在）
     import os

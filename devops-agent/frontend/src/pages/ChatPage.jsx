@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
-import { Send, Loader2, Bot, User, Sparkles, Terminal, AlertTriangle, MessageSquare, ChevronDown, ChevronRight, PanelRightOpen, PanelRightClose, PanelLeftOpen, PanelLeftClose } from 'lucide-react'
+import { Send, Loader2, Bot, User, Sparkles, Terminal, AlertTriangle, MessageSquare, ChevronDown, ChevronRight, PanelRightOpen, PanelRightClose, PanelLeftOpen, PanelLeftClose, Network } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { streamChatFetch, sendChat, listSessions, getSession, deleteSession } from '../api/client'
@@ -17,6 +17,11 @@ const EVENT_LABELS = {
   output: '生成回复',
   done: '完成',
   error: '错误',
+  dag_start: 'DAG 开始',
+  dag_layer_start: 'DAG 层执行',
+  dag_node_start: 'DAG 节点开始',
+  dag_node_done: 'DAG 节点完成',
+  dag_done: 'DAG 完成',
 }
 
 const EVENT_COLORS = {
@@ -29,6 +34,11 @@ const EVENT_COLORS = {
   output: 'text-primary-400',
   done: 'text-emerald-400',
   error: 'text-red-400',
+  dag_start: 'text-primary-400',
+  dag_layer_start: 'text-cyan-400',
+  dag_node_start: 'text-orange-400',
+  dag_node_done: 'text-emerald-400',
+  dag_done: 'text-emerald-400',
 }
 
 export default function ChatPage() {
@@ -491,6 +501,12 @@ export default function ChatPage() {
                               {evt.payload.detail}
                             </span>
                           )}
+                          {evt.payload?.execution_mode === 'dag_parallel' && (
+                            <span className="flex items-center gap-1 text-primary-400">
+                              <Network className="w-3 h-3" />
+                              DAG
+                            </span>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -533,6 +549,12 @@ export default function ChatPage() {
                       {evt.payload?.reply_preview && (
                         <span className="text-slate-500 truncate max-w-[200px]">
                           {evt.payload.reply_preview}
+                        </span>
+                      )}
+                      {evt.payload?.execution_mode === 'dag_parallel' && (
+                        <span className="flex items-center gap-1 text-primary-400">
+                          <Network className="w-3 h-3" />
+                          DAG
                         </span>
                       )}
                     </div>

@@ -314,3 +314,31 @@ export const importMCPServers = (jsonText) =>
     method: 'POST',
     body: JSON.stringify({ json_text: jsonText }),
   })
+
+// ============================================================
+//  DAG 编排引擎
+// ============================================================
+export const parseDAG = (toolCalls, sessionId = '') =>
+  request(`${API_BASE}/orchestrator/parse`, {
+    method: 'POST',
+    body: JSON.stringify({ tool_calls: toolCalls, session_id: sessionId }),
+  })
+
+export const runDAG = (toolCalls, sessionId = '') =>
+  request(`${API_BASE}/orchestrator/run`, {
+    method: 'POST',
+    body: JSON.stringify({ tool_calls: toolCalls, session_id: sessionId }),
+  })
+
+export const listDAGRuns = () => request(`${API_BASE}/orchestrator/runs`)
+
+export const getDAGRun = (runId) => request(`${API_BASE}/orchestrator/runs/${encodeURIComponent(runId)}`)
+
+export const confirmDAGRollback = (runId, confirmed = false, taskIds = []) =>
+  request(`${API_BASE}/orchestrator/runs/${encodeURIComponent(runId)}/rollback`, {
+    method: 'POST',
+    body: JSON.stringify({ confirmed, task_ids: taskIds }),
+  })
+
+export const checkDAGApplicability = (toolCalls) =>
+  request(`${API_BASE}/orchestrator/check?tool_calls=${encodeURIComponent(JSON.stringify(toolCalls))}`)

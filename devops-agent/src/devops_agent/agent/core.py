@@ -399,7 +399,7 @@ async def run_agent(
 
             return reply_text, ctx
 
-        # ---- 有工具调用 → 逐个执行 ----
+        # ---- 有工具调用 → DAG 并行或串行执行 ----
         logger.info(
             "LLM 返回 %d 个工具调用", len(response.tool_calls),
         )
@@ -412,37 +412,60 @@ async def run_agent(
         )
         messages.append(assistant_msg)
 
-        for tc in response.tool_calls:
-            tool_name = tc.get("name", "")
-            args = tc.get("arguments", tc.get("args", {}))
-            tool_id = tc.get("id", "")
+        # ---- DAG 编排：判断是否可并行执行 ----
+        from ..orchestrator import should_use_dag, parse_and_run as _dag_parse_run
 
-            logger.info("执行工具: %s(%s)", tool_name, args)
+        if _should_use_dag_engine(response.tool_calls):
+            logger.info("使用 DAG 引擎并行执行 %d 个工具调用", len(response.tool_calls))
 
-            # 执行工具
-            tool_result = await dispatch_tool_call(tool_name, args, ctx)
+            try:
+                record = await _dag_parse_run(
+                    response.tool_calls,
+                    ctx=ctx,
+                    session_id=sid,
+                )
 
-            # ---- 五段式日志：EXECUTE 阶段 ----
-            exec_content = _json.dumps({
-                "tool_name": tool_name,
-                "arguments": args,
-                "result_preview": str(tool_result)[:500],
-                "is_error": tool_result.get("is_error", False) if isinstance(tool_result, dict) else False,
-            }, ensure_ascii=False, default=str)
-            await append_reasoning_entry(
-                session_id=sid,
-                round_number=ctx.tool_round + 1,
-                stage="EXECUTE",
-                content=exec_content,
-            )
+                # 将 DAG 执行结果回传给 LLM（按原始顺序）
+                for tc in response.tool_calls:
+                    tool_name = tc.get("name", "")
+                    args = tc.get("arguments", tc.get("args", {}))
+                    tool_id = tc.get("id", "")
 
-            # 将工具结果加入消息历史
-            messages.append(LLMMessage(
-                role="tool",
-                content=json.dumps(tool_result, ensure_ascii=False, default=str),
-                name=tool_name,
-                tool_call_id=tool_id,
-            ))
+                    # 从 DAG 图中查找该节点的结果
+                    node_result = _find_node_result(record.graph, tool_id)
+
+                    # EXECUTE 日志
+                    exec_content = _json.dumps({
+                        "tool_name": tool_name,
+                        "arguments": args,
+                        "result_preview": str(node_result)[:500] if node_result else "",
+                        "is_error": (node_result or {}).get("is_error", False) if isinstance(node_result, dict) else False,
+                        "execution_mode": "dag_parallel",
+                    }, ensure_ascii=False, default=str)
+                    await append_reasoning_entry(
+                        session_id=sid,
+                        round_number=ctx.tool_round + 1,
+                        stage="EXECUTE",
+                        content=exec_content,
+                    )
+
+                    messages.append(LLMMessage(
+                        role="tool",
+                        content=_json.dumps(node_result, ensure_ascii=False, default=str)
+                            if node_result else _json.dumps({"error": "DAG 节点未执行"}, ensure_ascii=False),
+                        name=tool_name,
+                        tool_call_id=tool_id,
+                    ))
+
+            except Exception as dag_err:
+                logger.error("DAG 执行失败，降级为串行: %s", dag_err)
+                # 降级：逐个串行执行（原有逻辑）
+                for tc in response.tool_calls:
+                    await _execute_single_tool(tc, ctx, sid, _json, messages)
+        else:
+            # 原有串行逻辑
+            for tc in response.tool_calls:
+                await _execute_single_tool(tc, ctx, sid, _json, messages)
 
     # 超过最大轮次
     logger.warning(
@@ -537,6 +560,17 @@ async def run_agent_stream(
         )
         yield {"event": "output", "reply": block_msg, "metrics": {}}
         yield {"event": "done", "session_id": sid}
+
+        # ---- 注入拦截时的推理链路记录 ----
+        try:
+            await append_reasoning_entry(
+                session_id=sid,
+                round_number=ctx.tool_round + 1,
+                stage="SENSE",
+                content="【提示词注入拦截】" + _json.dumps(injection_result.to_dict(), ensure_ascii=False),
+            )
+        except Exception as log_err:
+            logger.warning("注入拦截推理链路记录失败（非阻塞）: %s", log_err)
         return
 
     yield {
@@ -544,6 +578,15 @@ async def run_agent_stream(
         "status": "ok",
         "injection_checked": True,
     }
+
+    # ---- 五段式日志：SENSE 阶段 ----
+    await append_reasoning_entry(
+        session_id=sid,
+        round_number=ctx.tool_round + 1,
+        stage="SENSE",
+        content=_json.dumps({"user_input": user_input, "input_length": len(user_input)}, ensure_ascii=False),
+        metadata={"timestamp": time.time()},
+    )
 
     # 添加当前用户输入
     messages.append(LLMMessage(role="user", content=user_input))
@@ -595,6 +638,20 @@ async def run_agent_stream(
             "usage": response.usage,
         }
 
+        # ---- 五段式日志：ANALYZE 阶段 ----
+        await append_reasoning_entry(
+            session_id=sid,
+            round_number=ctx.tool_round + 1,
+            stage="ANALYZE",
+            content=_json.dumps({
+                "has_tool_calls": bool(response.tool_calls),
+                "finish_reason": response.finish_reason,
+                "protocol": response.protocol_used,
+                "reply_preview": (response.reply_text or "")[:200],
+                "usage": response.usage,
+            }, ensure_ascii=False, default=str),
+        )
+
         # ---- plan 事件（如果有工具调用） ----
         if response.tool_calls:
             yield {
@@ -605,6 +662,20 @@ async def run_agent_stream(
                     for tc in response.tool_calls
                 ],
             }
+
+            # ---- 五段式日志：PLAN 阶段 ----
+            await append_reasoning_entry(
+                session_id=sid,
+                round_number=ctx.tool_round + 1,
+                stage="PLAN",
+                content=_json.dumps({
+                    "tool_count": len(response.tool_calls),
+                    "tool_calls": [
+                        {"name": tc.get("name", ""), "args": tc.get("arguments", tc.get("args", {}))}
+                        for tc in response.tool_calls
+                    ],
+                }, ensure_ascii=False, default=str),
+            )
 
         # 无工具调用 → 直接返回
         if not response.tool_calls:
@@ -622,6 +693,21 @@ async def run_agent_stream(
                     "elapsed_seconds": round(elapsed, 2),
                 },
             }
+
+            # ---- 五段式日志：OUTPUT 阶段 ----
+            await append_reasoning_entry(
+                session_id=sid,
+                round_number=ctx.tool_round + 1,
+                stage="OUTPUT",
+                content=_json.dumps({
+                    "reply_preview": reply_text[:300],
+                    "total_tool_rounds": ctx.tool_round,
+                    "total_executions": ctx.execution_count,
+                    "total_probe_calls": ctx.probe_call_count,
+                    "total_tokens": ctx.total_llm_tokens,
+                    "elapsed_seconds": round(elapsed, 2),
+                }, ensure_ascii=False),
+            )
 
             # 自动提取记忆
             try:
@@ -642,7 +728,7 @@ async def run_agent_stream(
             yield {"event": "done", "session_id": sid}
             return
 
-        # 有工具调用 → 逐个执行
+        # 有工具调用 → DAG 并行或串行执行
         assistant_msg = LLMMessage(
             role="assistant",
             content=response.reply_text,
@@ -650,34 +736,118 @@ async def run_agent_stream(
         )
         messages.append(assistant_msg)
 
-        for tc in response.tool_calls:
-            tool_name = tc.get("name", "")
-            args = tc.get("arguments", tc.get("args", {}))
-            tool_id = tc.get("id", "")
+        # ---- DAG 编排：判断是否可并行执行 ----
+        if _should_use_dag_engine(response.tool_calls):
+            logger.info("SSE: 使用 DAG 引擎并行执行 %d 个工具调用", len(response.tool_calls))
 
-            # execute 事件（开始）
-            yield {
-                "event": "execute",
-                "tool_name": tool_name,
-                "arguments": args,
-            }
+            try:
+                from ..orchestrator import parse_and_run as _stream_dag_run
 
-            tool_result = await dispatch_tool_call(tool_name, args, ctx)
+                record = await _stream_dag_run(
+                    response.tool_calls,
+                    ctx=ctx,
+                    session_id=sid,
+                )
 
-            # execute_done 事件（完成）
-            yield {
-                "event": "execute_done",
-                "tool_name": tool_name,
-                "result_preview": str(tool_result)[:300],
-                "is_error": tool_result.get("is_error", False) if isinstance(tool_result, dict) else False,
-            }
+                # 将 DAG 结果按原始 tool_calls 顺序回传 SSE 事件
+                for tc in response.tool_calls:
+                    tool_name = tc.get("name", "")
+                    args = tc.get("arguments", tc.get("args", {}))
+                    tool_id = tc.get("id", "")
+                    node_result = _find_node_result(record.graph, tool_id)
 
-            messages.append(LLMMessage(
-                role="tool",
-                content=json.dumps(tool_result, ensure_ascii=False, default=str),
-                name=tool_name,
-                tool_call_id=tool_id,
-            ))
+                    yield {"event": "execute", "tool_name": tool_name, "arguments": args}
+                    yield {
+                        "event": "execute_done",
+                        "tool_name": tool_name,
+                        "result_preview": str(node_result)[:300] if node_result else "",
+                        "is_error": (node_result or {}).get("is_error", False)
+                            if isinstance(node_result, dict) else False,
+                        "execution_mode": "dag_parallel",
+                    }
+
+                    exec_content = _json.dumps({
+                        "tool_name": tool_name, "arguments": args,
+                        "result_preview": str(node_result)[:500],
+                        "is_error": (node_result or {}).get("is_error", False),
+                        "execution_mode": "dag_parallel",
+                    }, ensure_ascii=False, default=str)
+                    await append_reasoning_entry(
+                        session_id=sid, round_number=ctx.tool_round + 1,
+                        stage="EXECUTE", content=exec_content,
+                    )
+
+                    messages.append(LLMMessage(
+                        role="tool",
+                        content=_json.dumps(node_result, ensure_ascii=False, default=str)
+                            if node_result else _json.dumps({"error": "DAG 节点未执行"}, ensure_ascii=False),
+                        name=tool_name, tool_call_id=tool_id,
+                    ))
+            except Exception as dag_err:
+                logger.error("SSE DAG 执行失败，降级为串行: %s", dag_err)
+                # 降级：逐个串行执行（原有逻辑）
+                for tc in response.tool_calls:
+                    _tname = tc.get("name", "")
+                    _targs = tc.get("arguments", tc.get("args", {}))
+                    _tid = tc.get("id", "")
+
+                    yield {"event": "execute", "tool_name": _tname, "arguments": _targs}
+                    _tr = await dispatch_tool_call(_tname, _targs, ctx)
+                    yield {
+                        "event": "execute_done",
+                        "tool_name": _tname,
+                        "result_preview": str(_tr)[:300],
+                        "is_error": _tr.get("is_error", False) if isinstance(_tr, dict) else False,
+                        "execution_mode": "serial_fallback",
+                    }
+
+                    _ec = _json.dumps({
+                        "tool_name": _tname, "arguments": _targs,
+                        "result_preview": str(_tr)[:500],
+                        "is_error": _tr.get("is_error", False),
+                        "execution_mode": "serial_fallback",
+                    }, ensure_ascii=False, default=str)
+                    await append_reasoning_entry(
+                        session_id=sid, round_number=ctx.tool_round + 1,
+                        stage="EXECUTE", content=_ec,
+                    )
+                    messages.append(LLMMessage(
+                        role="tool",
+                        content=json.dumps(_tr, ensure_ascii=False, default=str),
+                        name=_tname, tool_call_id=_tid,
+                    ))
+        else:
+            # 原有串行执行逻辑
+            for tc in response.tool_calls:
+                tool_name = tc.get("name", "")
+                args = tc.get("arguments", tc.get("args", {}))
+                tool_id = tc.get("id", "")
+
+                yield {"event": "execute", "tool_name": tool_name, "arguments": args}
+                tool_result = await dispatch_tool_call(tool_name, args, ctx)
+                yield {
+                    "event": "execute_done",
+                    "tool_name": tool_name,
+                    "result_preview": str(tool_result)[:300],
+                    "is_error": tool_result.get("is_error", False) if isinstance(tool_result, dict) else False,
+                    "execution_mode": "serial",
+                }
+
+                exec_content = _json.dumps({
+                    "tool_name": tool_name, "arguments": args,
+                    "result_preview": str(tool_result)[:500],
+                    "is_error": tool_result.get("is_error", False),
+                    "execution_mode": "serial",
+                }, ensure_ascii=False, default=str)
+                await append_reasoning_entry(
+                    session_id=sid, round_number=ctx.tool_round + 1,
+                    stage="EXECUTE", content=exec_content,
+                )
+                messages.append(LLMMessage(
+                    role="tool",
+                    content=json.dumps(tool_result, ensure_ascii=False, default=str),
+                    name=tool_name, tool_call_id=tool_id,
+                ))
 
     # 超过最大轮次
     yield {
@@ -738,6 +908,78 @@ async def load_session_history(session_id: str) -> list[dict] | None:
 
 def clear_session(session_id: str) -> None:
     """清除内存缓存中的会话（兼容接口，DB 中用 delete_session）"""
+
+
+def _should_use_dag_engine(tool_calls: list[dict]) -> bool:
+    """
+    判断是否应使用 DAG 引擎并行执行 tool_calls。
+
+    条件：>= 2 个工具调用，且存在 >= 2 个只读工具。
+    """
+    if len(tool_calls) < 2:
+        return False
+    try:
+        from ..orchestrator import should_use_dag
+        return should_use_dag(tool_calls)
+    except Exception as e:
+        logger.warning("DAG 引擎判断异常（降级串行）: %s", e)
+        return False
+
+
+async def _execute_single_tool(
+    tc: dict,
+    ctx: AgentContext,
+    sid: str,
+    _json_module,
+    messages: list[LLMMessage],
+) -> None:
+    """执行单个工具调用并记录日志（原有串行逻辑的提取函数）"""
+    import json
+
+    tool_name = tc.get("name", "")
+    args = tc.get("arguments", tc.get("args", {}))
+    tool_id = tc.get("id", "")
+
+    logger.info("执行工具: %s(%s)", tool_name, args)
+
+    # 执行工具
+    tool_result = await dispatch_tool_call(tool_name, args, ctx)
+
+    # ---- 五段式日志：EXECUTE 阶段 ----
+    exec_content = _json_module.dumps({
+        "tool_name": tool_name,
+        "arguments": args,
+        "result_preview": str(tool_result)[:500],
+        "is_error": tool_result.get("is_error", False) if isinstance(tool_result, dict) else False,
+        "execution_mode": "serial",
+    }, ensure_ascii=False, default=str)
+    await append_reasoning_entry(
+        session_id=sid,
+        round_number=ctx.tool_round + 1,
+        stage="EXECUTE",
+        content=exec_content,
+    )
+
+    # 将工具结果加入消息历史
+    messages.append(LLMMessage(
+        role="tool",
+        content=json.dumps(tool_result, ensure_ascii=False, default=str),
+        name=tool_name,
+        tool_call_id=tool_id,
+    ))
+
+
+def _find_node_result(graph, tool_call_id: str) -> dict | None:
+    """从 TaskGraph 中查找指定 tool_call_id 的节点结果"""
+    if graph is None:
+        return None
+    for node in graph.nodes.values():
+        if node.id == tool_call_id:
+            if node.result is not None:
+                return node.result
+            if node.status and node.status.value != "pending":
+                return {"status": node.status.value, "error": node.error}
+    return None
 
 
 __all__ = [
