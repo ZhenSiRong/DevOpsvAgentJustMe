@@ -219,16 +219,54 @@ class ConversationState:
 ## 模型间关系图
 
 ```
+(认证)         (会话)             (消息)
 User ──1:N── Session ──1:N── Message
                               │
                               1:N── AuditLog (每条消息产生多条审计记录)
 
-Config (全局键值对，无外键)
+(推理链路)     (记忆/RAG)
+Session ──1:N── ReasoningEvent      Session ──1:N── Memory
+    │                                  │
+    │                                  type: fact/preference/summary/system_state
+    │                                  importance: 0.0–10.0 (越重要越高)
+    │
+    └──1:1── ConversationState
 
-ConversationState (按 session_id 一对一)
+(工具扩展)
+DynamicTool (独立表，全局定义)
+MCPServer   (独立表，MCP 连接配置)
+
+(编排)
+DAGRun      (按 session_id 关联)
+DAGNode     (按 run_id 关联，含状态/结果/回滚)
+
+(运行时)
+Config      (全局键值对，无外键)
+
+(安全)
+WhitelistPaths (系统级写保护配置)
+InjectionAttempts (提示词注入日志)
 ```
 
----
+**15 个 SQLite 表清单：**
+
+| 表 | 说明 | 关键字段 |
+|----|------|---------|
+| `sessions` | 会话 | id, title, user_id, created_at |
+| `messages` | 消息 | id, session_id, role, content, tool_calls |
+| `audit_logs` | 审计日志 | id, session_id, stage, content, created_at |
+| `configs` | 键值配置 | key, value, is_overridden |
+| `conversation_state` | 对话状态快照 | session_id, context_summary |
+| `memories` | 长期记忆(RAG) | id, session_id, type, content, importance |
+| `reasoning` | 推理链路 | id, session_id, round, stage, content |
+| `dynamic_tools` | 动态注册工具 | id, name, description, command_template |
+| `mcp_servers` | MCP 连接配置 | id, name, command, args, enabled |
+| `dag_runs` | DAG 执行记录 | id, session_id, status, graph_json |
+| `users` | 用户 | id, username, password_hash, role |
+| `whitelist_paths` | 写保护白名单 | path |
+| `injection_attempts` | 注入检测日志 | id, input, severity, blocked |
+| `access_tokens` | JWT 刷新令牌 | id, user_id, token, expires_at |
+| `memorization_log` | 记忆提取日志 | session_id, extracted_count |
 
 ## 关键设计决策说明
 

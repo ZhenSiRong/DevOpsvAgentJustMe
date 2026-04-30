@@ -19,6 +19,14 @@
                    │
                    ↓
             09 设计文档汇总
+                   │
+             ┌────┴────┐
+             ↓         ↓
+      10 部署运维  11 前端架构
+             │         │
+             └──┬── 12 安全体系
+                │
+                └── 13 Harness 架构分析
 ```
 
 | 序号 | 文档 | 阅读理由 |
@@ -26,12 +34,16 @@
 | **01** | [业务目标](01-business-goals.md) | 先理解"为什么做这个项目"——场景、痛点、四大业务目标 |
 | **02** | [功能清单](02-functional-requirements.md) | 再看"要做什么"——功能点与赛题评分权重对照 |
 | **03** | [核心流程](03-core-workflow.mmd) | 理解"怎么做"——对话交互时序、五段式推理链路 |
-| **04** | [数据模型](04-data-model.md) | 数据层设计——Pydantic Schema、ORM、表关系 |
-| **05** | [接口契约](05-api-contract.md) | 接口层设计——RESTful API、SSE 流式、WebSocket、错误码 |
-| **06** | [技术栈选型](06-tech-stack.md) | 技术决策——为什么选 Vue 3 + FastAPI + SQLite |
+| **04** | [数据模型](04-data-model.md) | 数据层设计——Pydantic Schema、ORM、15 个 SQLite 表 |
+| **05** | [接口契约](05-api-contract.md) | 接口层设计——17 个路由模块、SSE 流式、统一响应格式 |
+| **06** | [技术栈选型](06-tech-stack.md) | 技术决策——为什么选 React 18 + FastAPI + SQLite |
 | **07** | [架构设计](07-architecture.mmd) | 全局架构——系统分层、组件关系、部署视图 |
 | **08** | [开发规范](08-development-guide.md) | 工程实践——TDD、代码规范、Git 流程 |
 | **09** | [设计文档汇总](09-design-summary.mmd) | 设计决策索引——关键决策记录与版本历史 |
+| **10** | [部署运维指南](10-部署运维指南.md) | VM 部署——SSH 规则、CI/CD、龙芯迁移 |
+| **11** | [前端架构说明](11-前端架构说明.md) | SPA——React 路由、11 个页面、API 通信 |
+| **12** | [安全体系说明](12-安全体系说明.md) | 七层防护——JWT、HITL、校验器、审计 |
+| **13** | [Harness 架构分析](Harness-Environment-Agent框架对标分析-2026.md) | 对标——2026 前沿框架六大能力维度分析 |
 
 ---
 
@@ -48,20 +60,19 @@
 
 ### 03 核心流程
 - 用户输入 → OS 感知 → 安全校验 → 工具执行 → 响应生成的完整时序
-- 五段式审计日志：received → sense → inference → security_check → execution → response_ready
+- 五段式审计日志：SENSE → ANALYZE → PLAN → EXECUTE → OUTPUT
 
 ### 04 数据模型
 - Request/Response Pydantic Schema
-- SQLite ORM 模型（Session、Message、AuditLog、Config）
-- 模型关系图 + 关键设计决策（audit_trail 双存储、tool_calls JSON 存储）
+- SQLite ORM 模型（15 个表）
+- 模型关系图 + 关键设计决策
 
 ### 05 接口契约
-- 5 组 RESTful API：对话、探针、会话 CRUD、审计日志、认证
-- WebSocket 实时推送接口
-- 统一错误格式 + 错误码分类
+- **17 个路由模块**：健康·探针·对话·会话·安全·执行·配置·动态工具·MCP·审计·推理·认证·编排·知识库·反馈·模型池·Prompt
+- SSE 流式对话 / 统一响应格式 / 错误码分类
 
 ### 06 技术栈选型
-- 表现层：Vue 3 + Vite + Tailwind CSS
+- 表现层：React 18 + Vite + Tailwind CSS + React Router DOM
 - 业务逻辑层：FastAPI + Uvicorn + Python 3.12
 - 数据访问层：SQLite + aiosqlite
 - 各组件选型理由 + 备选方案
@@ -80,6 +91,26 @@
 - 设计决策记录（ADR）索引
 - 文档版本历史
 
+### 10 部署运维指南
+- VM 环境 + SSH 规则 + CI/CD 流水线
+- 手动部署步骤 + 服务管理
+- 龙芯 loongarch64 迁移检查清单
+
+### 11 前端架构说明
+- React 18 SPA 路由结构（11 个页面）
+- 侧边栏导航 + 认证流程
+- SSE 流式通信 + API 客户端
+
+### 12 安全体系说明
+- 七层防护架构图
+- 提示词注入 / JWT / 校验器 / HITL / 幂等 / 审计
+- 10 种危险操作模式详细列表
+
+### 13 Harness 架构分析
+- 2026 年七大 Agent 框架横向对比
+- 六维度（上下文/工具/编排/Skill/护栏/可观测）对标
+- DevOps Agent 演进排序路线
+
 ---
 
-*规划层文档由团队 A、B 共同维护 | 最后更新：2026-04-27*
+*规划层文档由团队 A、B 共同维护 | 最后更新：2026-04-30*
