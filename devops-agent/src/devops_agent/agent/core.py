@@ -315,39 +315,27 @@ async def run_agent(
     tools_defs = get_tool_definitions()
 
     while ctx.tool_round < MAX_TOOL_ROUNDS:
-        # 根据 protocol 切换主/备参数
-        if llm_cfg.protocol == "anthropic":
-            base_url = llm_cfg.anthropic_base_url
-            api_key = llm_cfg.anthropic_api_key
-            model = llm_cfg.anthropic_model
-            fallback_base_url = llm_cfg.base_url
-            fallback_api_key = llm_cfg.api_key
-            fallback_model = llm_cfg.model
-        else:
-            base_url = llm_cfg.base_url
-            api_key = llm_cfg.api_key
-            model = llm_cfg.model
-            fallback_base_url = llm_cfg.anthropic_base_url
-            fallback_api_key = llm_cfg.anthropic_api_key
-            fallback_model = llm_cfg.anthropic_model
-
         # ---- 上下文压缩检查 ----
         if ctx_mgr.check_and_summarize(messages, user_input, ctx.tool_round):
             messages = ctx_mgr.apply_compression(messages)
 
-        # 调用 LLM（首次尝试）
-        response: LLMResponse = await call_llm(
+        # ---- 多模型路由调用（自动故障转移）- ---
+        from .model_router import call_with_routing
+
+        router_result = await call_with_routing(
             messages=messages,
-            protocol=LLMProtocol(llm_cfg.protocol),
             tools=tools_defs,
-            base_url=base_url,
-            api_key=api_key,
-            model=model,
             temperature=llm_cfg.temperature,
             max_tokens=llm_cfg.max_tokens,
-            fallback_base_url=fallback_base_url,
-            fallback_api_key=fallback_api_key,
-            fallback_model=fallback_model,
+        )
+
+        # 适配为 LLMResponse 格式
+        response = LLMResponse(
+            reply_text=router_result["reply_text"],
+            tool_calls=router_result["tool_calls"],
+            finish_reason=router_result["finish_reason"],
+            protocol_used=router_result["protocol_used"],
+            usage=router_result["usage"],
         )
 
         # 记录 token 用量
@@ -688,39 +676,27 @@ async def run_agent_stream(
     tools_defs = get_tool_definitions()
 
     while ctx.tool_round < MAX_TOOL_ROUNDS:
-        # 根据 protocol 切换主/备参数
-        if llm_cfg.protocol == "anthropic":
-            base_url = llm_cfg.anthropic_base_url
-            api_key = llm_cfg.anthropic_api_key
-            model = llm_cfg.anthropic_model
-            fallback_base_url = llm_cfg.base_url
-            fallback_api_key = llm_cfg.api_key
-            fallback_model = llm_cfg.model
-        else:
-            base_url = llm_cfg.base_url
-            api_key = llm_cfg.api_key
-            model = llm_cfg.model
-            fallback_base_url = llm_cfg.anthropic_base_url
-            fallback_api_key = llm_cfg.anthropic_api_key
-            fallback_model = llm_cfg.anthropic_model
-
         # ---- 上下文压缩检查 ----
         if ctx_mgr.check_and_summarize(messages, user_input, ctx.tool_round):
             messages = ctx_mgr.apply_compression(messages)
 
-        # 调用 LLM（首次尝试）
-        response: LLMResponse = await call_llm(
+        # ---- 多模型路由调用（自动故障转移）- ---
+        from .model_router import call_with_routing
+
+        router_result = await call_with_routing(
             messages=messages,
-            protocol=LLMProtocol(llm_cfg.protocol),
             tools=tools_defs,
-            base_url=base_url,
-            api_key=api_key,
-            model=model,
             temperature=llm_cfg.temperature,
             max_tokens=llm_cfg.max_tokens,
-            fallback_base_url=fallback_base_url,
-            fallback_api_key=fallback_api_key,
-            fallback_model=fallback_model,
+        )
+
+        # 适配为 LLMResponse 格式
+        response = LLMResponse(
+            reply_text=router_result["reply_text"],
+            tool_calls=router_result["tool_calls"],
+            finish_reason=router_result["finish_reason"],
+            protocol_used=router_result["protocol_used"],
+            usage=router_result["usage"],
         )
 
         ctx.total_llm_tokens += sum(response.usage.values())

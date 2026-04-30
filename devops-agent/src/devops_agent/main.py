@@ -147,7 +147,7 @@ def create_app() -> FastAPI:
     # ============================================================
     #  注册路由模块（Day 4 完成 — 8 个路由端点 + Day 5 动态工具）
     # ============================================================
-    from .api.routes import health, probe, execute, chat, sessions, audit, reasoning, safety, tools, config, mcp, orchestrator, auth, prompt, knowledge, feedback
+    from .api.routes import health, probe, execute, chat, sessions, audit, reasoning, safety, tools, config, mcp, orchestrator, auth, prompt, knowledge, feedback, model_pool
     from .auth.auth import get_current_user
 
     # 认证路由（无需鉴权）
@@ -192,6 +192,8 @@ def create_app() -> FastAPI:
     app.include_router(knowledge.router,          # /api/v1/knowledge/*
                        dependencies=[Depends(get_current_user)])
     app.include_router(feedback.router,           # /api/v1/feedback/* /evolution/*
+                       dependencies=[Depends(get_current_user)])
+    app.include_router(model_pool.router,         # /api/v1/models/pool
                        dependencies=[Depends(get_current_user)])
 
     # 挂载前端静态文件（如果存在）
