@@ -142,6 +142,10 @@ class ChatMessage(BaseModel):
     content: str = Field(..., min_length=1, description="消息内容")
     tool_calls: list[dict] | None = Field(default=None, description="工具调用记录")
     tool_result: Any | None = Field(default=None, description="工具执行结果")
+    reasoning_events: list[dict] | None = Field(
+        default=None,
+        description="推理链路事件列表（仅 assistant 消息），格式为 [{type, payload, time}, ...]",
+    )
 
 
 class ChatRequest(BaseModel):
