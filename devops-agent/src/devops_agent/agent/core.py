@@ -236,6 +236,16 @@ async def run_agent(
     # ---- 构建 LLM 消息列表 ----
     system_prompt = build_system_prompt()
 
+    # 注入 Agent Skills（L1：技能清单注入 ~24 tokens/skill）
+    try:
+        from .skills import get_skill_registry
+        skill_reg = get_skill_registry()
+        skills_l1 = skill_reg.get_l1_context()
+        if skills_l1:
+            system_prompt += "\n\n" + skills_l1
+    except Exception as e:
+        logger.warning("技能注入失败（非阻塞）: %s", e)
+
     # 注入相关记忆（跨会话长期记忆）
     try:
         mm = get_memory_manager()
@@ -263,6 +273,12 @@ async def run_agent(
                 ))
             else:
                 messages.append(LLMMessage(role=role, content=content))
+
+    # ---- 上下文窗口管理器（Token 预算 + 锚定摘要） ----
+    from .context_manager import ContextManager
+    ctx_mgr = ContextManager()
+    ctx_mgr.update_intent(user_input[:200])
+    ctx._context_mgr = ctx_mgr  # 存储引用，供 _execute_single_tool 使用
 
     # ---- 提示词注入检测（Phase 2 安全层） ----
     from ..safety.prompt_injection import scan_input
@@ -315,7 +331,11 @@ async def run_agent(
             fallback_api_key = llm_cfg.anthropic_api_key
             fallback_model = llm_cfg.anthropic_model
 
-        # 调用 LLM
+        # ---- 上下文压缩检查 ----
+        if ctx_mgr.check_and_summarize(messages, user_input, ctx.tool_round):
+            messages = ctx_mgr.apply_compression(messages)
+
+        # 调用 LLM（首次尝试）
         response: LLMResponse = await call_llm(
             messages=messages,
             protocol=LLMProtocol(llm_cfg.protocol),
@@ -626,7 +646,11 @@ async def run_agent_stream(
             fallback_api_key = llm_cfg.anthropic_api_key
             fallback_model = llm_cfg.anthropic_model
 
-        # 调用 LLM
+        # ---- 上下文压缩检查 ----
+        if ctx_mgr.check_and_summarize(messages, user_input, ctx.tool_round):
+            messages = ctx_mgr.apply_compression(messages)
+
+        # 调用 LLM（首次尝试）
         response: LLMResponse = await call_llm(
             messages=messages,
             protocol=LLMProtocol(llm_cfg.protocol),
@@ -960,6 +984,14 @@ async def _execute_single_tool(
     # 执行工具
     tool_result = await dispatch_tool_call(tool_name, args, ctx)
 
+    # 记录关键操作到上下文管理器（用于摘要压缩）
+    if tool_name == "execute_command" and isinstance(tool_result, dict) and not tool_result.get("is_error"):
+        from .context_manager import ContextManager
+        cmd = str(args.get("command", ""))[:80]
+        ctx_mgr_local = getattr(ctx, "_context_mgr", None)
+        if ctx_mgr_local:
+            ctx_mgr_local.record_action(f"执行命令: {cmd}")
+
     # ---- 五段式日志：EXECUTE 阶段 ----
     exec_content = _json_module.dumps({
         "tool_name": tool_name,
@@ -975,10 +1007,13 @@ async def _execute_single_tool(
         content=exec_content,
     )
 
-    # 将工具结果加入消息历史
+    # 将工具结果加入消息历史（输出过长时智能截断）
+    from .context_manager import truncate_tool_output
+    tool_output = json.dumps(tool_result, ensure_ascii=False, default=str)
+    tool_output = truncate_tool_output(tool_output)
     messages.append(LLMMessage(
         role="tool",
-        content=json.dumps(tool_result, ensure_ascii=False, default=str),
+        content=tool_output,
         name=tool_name,
         tool_call_id=tool_id,
     ))

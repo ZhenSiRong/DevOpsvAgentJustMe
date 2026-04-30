@@ -25,6 +25,7 @@ from ...orchestrator import (
 )
 from ...orchestrator.task import GraphRunStatus
 from ...db.dag_runs import save_dag_run, list_dag_runs, get_dag_run
+from ...orchestrator.approval import get_approval_gate, ApprovalStatus, is_dangerous_operation
 
 logger = logging.getLogger(__name__)
 
@@ -207,6 +208,28 @@ async def confirm_rollback(run_id: str, body: RollbackConfirmRequest) -> APIResp
             "message": f"已确认 {len(executed)} 个回滚操作，请通过 execute_command 依次执行",
         },
     )
+
+
+class ApprovalAction(BaseModel):
+    node_id: str = Field(..., description="节点 ID")
+    action: str = Field(..., description="approve 或 reject")
+
+
+@router.post("/runs/{run_id}/approve", response_model=APIResponse, summary="审批 DAG 节点")
+async def approve_node(run_id: str, body: ApprovalAction) -> APIResponse:
+    gate = get_approval_gate()
+    if body.action == "approve":
+        if gate.approve(run_id, body.node_id):
+            return APIResponse(message=f"已批准 {body.node_id}")
+    elif body.action == "reject":
+        if gate.reject(run_id, body.node_id):
+            return APIResponse(message=f"已拒绝 {body.node_id}")
+    return APIResponse(code=404, message="审批失败")
+
+
+@router.get("/runs/{run_id}/pending", response_model=APIResponse, summary="待审批列表")
+async def list_pending(run_id: str) -> APIResponse:
+    return APIResponse(data=get_approval_gate().get_pending(run_id))
 
 
 @router.get("/check", response_model=APIResponse, summary="检查是否应使用 DAG")
