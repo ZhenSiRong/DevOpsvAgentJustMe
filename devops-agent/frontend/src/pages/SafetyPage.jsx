@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { escapeHtml } from '../utils/sanitize'
 import {
   Shield,
   ShieldCheck,
@@ -349,8 +350,8 @@ export default function SafetyPage() {
                 </span>
               </div>
               <div className="space-y-2 text-sm">
-                <div><span className="text-slate-500">命令:</span> <code className="text-slate-300 font-mono bg-slate-900 px-2 py-0.5 rounded">{validationResult.command}</code></div>
-                <div><span className="text-slate-500">原因:</span> <span className="text-slate-300">{validationResult.reason}</span></div>
+                <div><span className="text-slate-500">命令:</span> <code className="text-slate-300 font-mono bg-slate-900 px-2 py-0.5 rounded">{escapeHtml(validationResult.command)}</code></div>
+                <div><span className="text-slate-500">原因:</span> <span className="text-slate-300">{escapeHtml(validationResult.reason)}</span></div>
                 {validationResult.rule_id && (
                   <div><span className="text-slate-500">规则:</span> <span className="text-slate-300">{validationResult.rule_id}</span></div>
                 )}

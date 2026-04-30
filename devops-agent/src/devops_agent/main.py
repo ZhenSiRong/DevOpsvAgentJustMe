@@ -87,25 +87,55 @@ def create_app() -> FastAPI:
         redoc_url="/redoc",
     )
 
-    # CORS：允许前端跨域访问
+    # CORS：按环境限制来源（* 与 credentials 不兼容，违反浏览器规范）
+    _origins = [
+        "http://localhost:5173",   # Vite 开发服务器
+        "http://localhost:3000",   # 构建预览
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:3000",
+    ]
+    if settings.app_debug:
+        # 开发环境额外允许前端开发服务器
+        pass
+    # 生产环境可通过环境变量 CORS_ORIGINS 追加域名
+    import os
+    extra_origins = os.environ.get("CORS_ORIGINS", "")
+    if extra_origins:
+        _origins.extend([o.strip() for o in extra_origins.split(",") if o.strip()])
+
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # MVP 全开放，生产环境应限制
+        allow_origins=_origins,
         allow_credentials=True,
-        allow_methods=["*"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["*"],
     )
 
-    # 全局异常处理器
+    # 全局异常处理器（生产环境不泄露内部细节）
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):
-        logger.error("未处理异常: %s", exc, exc_info=True)
+        import uuid
+        error_id = str(uuid.uuid4())[:8]
+        logger.error("未处理异常 [%s]: %s", error_id, exc, exc_info=True)
+        if settings.app_debug:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "error": {
+                        "code": "INTERNAL_ERROR",
+                        "message": str(exc),
+                        "error_id": error_id,
+                    }
+                },
+            )
+        # 生产环境只返回错误 ID，详情在日志中查找
         return JSONResponse(
             status_code=500,
             content={
                 "error": {
                     "code": "INTERNAL_ERROR",
-                    "message": str(exc) if settings.app_debug else "服务器内部错误",
+                    "message": "服务器内部错误",
+                    "error_id": error_id,
                 }
             },
         )

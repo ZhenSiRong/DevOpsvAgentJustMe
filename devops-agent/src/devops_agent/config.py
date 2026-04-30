@@ -21,14 +21,14 @@ class Settings(BaseSettings):
     # === LLM（OpenAI 协议） ===
     llm_protocol: str = "openai"  # openai | anthropic
     llm_base_url: str = "https://api.minimaxi.com/v1"
-    llm_api_key: str = "sk-cp-WuUWdO9Vm74-DeEurDgH2FC9wpW3HoWQtVO11gxYHrLwQ3_bCLE2GYx4tqrV0gqunmd_ri1Id5Tu2z0CcgEy-dP-Pdg2FaTXIPQoY3nvaMiUJ3eoC-v3fI4"
+    llm_api_key: str = ""  # 必须通过 .env 或环境变量注入，禁止硬编码
     llm_model: str = "MiniMax-M2.1"
     llm_temperature: float = 0.3
     llm_max_tokens: int = 4096
 
     # === LLM（Anthropic 协议备用） ===
     anthropic_base_url: str = "https://api.minimaxi.com/anthropic"
-    anthropic_api_key: str = "sk-cp-WuUWdO9Vm74-DeEurDgH2FC9wpW3HoWQtVO11gxYHrLwQ3_bCLE2GYx4tqrV0gqunmd_ri1Id5Tu2z0CcgEy-dP-Pdg2FaTXIPQoY3nvaMiUJ3eoC-v3fI4"
+    anthropic_api_key: str = ""  # 必须通过 .env 或环境变量注入，禁止硬编码
     anthropic_model: str = "MiniMax-M2.1"
 
     # === 数据库 ===
@@ -64,7 +64,17 @@ class Settings(BaseSettings):
 
 @lru_cache
 def get_settings() -> Settings:
-    return Settings()
+    settings = Settings()
+    # 启动时安全校验：API Key 必须通过环境变量注入
+    if not settings.llm_api_key:
+        raise RuntimeError(
+            "llm_api_key 未配置！请在 .env 文件或环境变量中设置 LLM_API_KEY。"
+            "禁止在源码中硬编码密钥。"
+        )
+    if settings.llm_protocol == "anthropic" or settings.anthropic_api_key:
+        # Anthropic 协议启用或有备用 key 时校验
+        pass  # anthropic_api_key 允许为空（非必须）
+    return settings
 
 
 # ============================================================

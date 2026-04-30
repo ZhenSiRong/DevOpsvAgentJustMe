@@ -67,11 +67,13 @@ def _check_url_safety(url: str) -> tuple[bool, str]:
 
 
 def _render_template(template: str, params: dict[str, Any]) -> str:
-    """简单模板替换：{{key}} -> value。不支持复杂 Jinja2。"""
+    """简单模板替换：{{key}} -> value。所有参数值经 shlex.quote 转义防注入。"""
     result = template
     for key, value in params.items():
         placeholder = f"{{{{{key}}}}}"
-        result = result.replace(placeholder, str(value))
+        # 对参数值进行 shell 安全转义，防止命令注入（; $( ) | 等）
+        safe_value = shlex.quote(str(value))
+        result = result.replace(placeholder, safe_value)
     # 检查是否还有未替换的占位符
     remaining = re.findall(r"\{\{[\w_]+\}\}", result)
     if remaining:

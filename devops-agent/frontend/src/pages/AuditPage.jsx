@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { ClipboardList, Loader2, AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react'
 import { queryAudit, auditStats } from '../api/client'
+import { escapeHtml } from '../utils/sanitize'
 
 const STATUS_STYLES = {
   SUCCESS: 'bg-emerald-900/30 text-emerald-400 border-emerald-800/30',
@@ -141,7 +142,7 @@ export default function AuditPage() {
                   <td className="px-4 py-3 font-mono text-xs text-slate-500">#{log.id}</td>
                   <td className="px-4 py-3 text-xs text-slate-400 whitespace-nowrap">{formatTime(log.timestamp)}</td>
                   <td className="px-4 py-3">
-                    <code className="text-xs text-slate-300 bg-slate-900 px-2 py-1 rounded font-mono">{log.command}</code>
+                    <code className="text-xs text-slate-300 bg-slate-900 px-2 py-1 rounded font-mono">{escapeHtml(log.command)}</code>
                   </td>
                   <td className="px-4 py-3">
                     <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium border ${STATUS_STYLES[log.status] || 'bg-slate-800 text-slate-400 border-slate-700'}`}>

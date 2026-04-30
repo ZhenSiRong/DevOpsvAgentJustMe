@@ -64,19 +64,85 @@ export function streamChat(message, sessionId = null, onEvent) {
   })
 }
 
-export async function streamChatFetch(message, sessionId, onEvent) {
-  const response = await fetch(`${API_BASE}/chat/stream`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message, session_id: sessionId }),
-  })
+export async function streamChatFetch(message, sessionId, onEvent, options = {}) {
+  const {
+    maxRetries = 3,
+    retryBaseDelay = 1000,
+    retryableStatuses = [502, 503, 504],
+  } = options
 
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}))
-    throw new Error(err.detail || `HTTP ${response.status}`)
+  let lastError
+
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      if (attempt > 0) {
+        // 指数退避：1s → 2s → 4s
+        const delay = retryBaseDelay * Math.pow(2, attempt - 1)
+        console.warn(`[SSE] 第 ${attempt} 次重连，${delay}ms 后尝试...`)
+        await new Promise(resolve => setTimeout(resolve, delay))
+        onEvent('system', { type: 'retrying', attempt, delay })
+      }
+
+      const response = await fetch(`${API_BASE}/chat/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message, session_id: sessionId }),
+      })
+
+      if (!response.ok) {
+        const status = response.status
+        const err = await response.json().catch(() => ({}))
+        const errorMsg = err.detail || `HTTP ${status}`
+
+        // 仅对可重试状态码进行重试
+        if (retryableStatuses.includes(status) && attempt < maxRetries) {
+          lastError = new Error(errorMsg)
+          console.warn(`[SSE] ${errorMsg}，准备重试...`)
+          continue
+        }
+        throw new Error(errorMsg)
+      }
+
+      // 连接成功，开始读取流
+      return await _readSSEStream(response.body, onEvent)
+
+    } catch (err) {
+      lastError = err
+      // 网络级错误（AbortError / TypeError / NetworkError）可重试
+      if (attempt < maxRetries && _isRetryableNetworkError(err)) {
+        continue
+      }
+      throw lastError
+    }
   }
 
-  const reader = response.body.getReader()
+  throw lastError
+}
+
+/**
+ * 判断是否为可重试的网络错误（非业务逻辑错误）
+ */
+function _isRetryableNetworkError(err) {
+  if (err.name === 'AbortError') return false
+  const msg = (err.message || '').toLowerCase()
+  return (
+    msg.includes('network') ||
+    msg.includes('fetch') ||
+    msg.includes('failed to fetch') ||
+    msg.includes('abort') ||
+    msg.includes('timeout') ||
+    msg.includes('reset') ||
+    msg.includes('socket') ||
+    err instanceof TypeError
+  )
+}
+
+/**
+ * SSE 流读取器 —— 从 ReadableStream 中解析 Server-Sent Events
+ */
+async function _readSSEStream(body, onEvent) {
+
+  const reader = body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
 

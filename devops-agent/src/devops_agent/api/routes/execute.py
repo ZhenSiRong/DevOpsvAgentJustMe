@@ -76,16 +76,31 @@ async def execute_command(
             },
         )
 
-    # ---- 真实执行（运维者终端：只过安全校验，不过白名单） ----
-    try:
-        result = await execute_unrestricted(
-            command=body.command,
-            timeout=body.timeout,
-        )
+    # ---- 真实执行 ----
+    # 运维者模式：需显式 X-Operator-Mode header 标记，仍过安全校验但跳过白名单
+    # 普通/Agent 模式：同时经过安全校验 + 白名单检查（默认更安全）
+    is_operator_mode = request.headers.get("X-Operator-Mode", "").lower() == "true"
 
-        # 写入审计日志（异步，不阻塞响应）
+    try:
+        if is_operator_mode:
+            result = await execute_unrestricted(
+                command=body.command,
+                timeout=body.timeout,
+            )
+        else:
+            # 默认走完整安全链路：安全校验 + 白名单
+            from ...safety.executor import execute as execute_safe
+            result = await execute_safe(
+                command=body.command,
+                timeout=body.timeout,
+            )
+
+        # 写入审计日志（异步，不阻塞响应；失败时记录错误日志而非静默吞掉）
         import asyncio
-        asyncio.create_task(_audit_log_async(result, client_ip, session_id=body.session_id or ""))
+        audit_task = asyncio.create_task(
+            _audit_log_async(result, client_ip, session_id=body.session_id or "")
+        )
+        audit_task.add_done_callback(_audit_callback)
 
         response_data = {
             "command": result.command,
@@ -164,5 +179,14 @@ async def _audit_log_async(result, client_ip: str, session_id: str = ""):
         logger.info("审计记录已落库: cmd=%s status=%s by=%s",
                      result.command[:50], result.status.value, result.executed_by)
     except Exception as e:
-        # 审计写入失败不应影响主流程
-        logger.warning("审计日志写入失败(非阻塞): %s", e)
+        # 审计写入失败：提升日志级别为 ERROR（原 WARNING 会因日志级别过滤被忽略）
+        logger.error("审计日志写入失败: session=%s cmd=%s error=%s",
+                      session_id, result.command[:50] if result else "N/A", e)
+
+
+def _audit_callback(task):
+    """审计异步任务的 done callback：捕获未处理的异常，防止静默丢失"""
+    if not task.cancelled():
+        exc = task.exception()
+        if exc:
+            logger.error("审计日志任务异常(未被内层 try/except 捕获): %s", exc)

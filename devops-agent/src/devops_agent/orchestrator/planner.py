@@ -135,18 +135,16 @@ class PlanParser:
         - cat / less / more / head / tail / grep / find / ls / df /
           du / free / top / ps / netstat / ss / ip addr / journalctl /
           uname / hostname / date / whoami / id / systemctl status /
-          getent / wc / sort / uniq / diff / stat / file / lsof /
-          ping / traceroute / nslookup / dig / curl(不带 -X POST/PUT/DELETE)
 
         不在白名单中的命令统一视为写操作。
+        安全增强：对管道 | 分隔的每一段都进行只读检查，防止
+        "ls / | rm -rf /" 这类通过只读首命令绕过并行调度的攻击。
         """
         if not cmd_str:
             return False
 
-        # 提取第一个命令词（去掉管道和重定向）
-        first_cmd = cmd_str.strip().split()[0] if cmd_str.strip() else ""
-        # 去掉 sudo / usr/bin 等前缀
-        first_cmd = re.sub(r'^(sudo|/usr/bin/|/bin/|/usr/sbin/|/sbin/)', '', first_cmd)
+        # 拆分管道，每一段都必须是只读命令
+        segments = [s.strip() for s in cmd_str.split("|") if s.strip()]
 
         readonly_commands = {
             "cat", "less", "more", "head", "tail", "grep", "egrep", "fgrep",
@@ -160,29 +158,38 @@ class PlanParser:
             "type", "env", "printenv", "pwd", "history", "timedatectl",
         }
 
-        if first_cmd in readonly_commands:
+        for segment in segments:
+            # 提取该段的首个命令词
+            first_cmd = segment.split()[0] if segment else ""
+            # 去掉 sudo / 路径等前缀
+            first_cmd = re.sub(r'^(sudo|/usr/bin/|/bin/|/usr/sbin/|/sbin/)', '', first_cmd)
+
+            if first_cmd not in readonly_commands:
+                return False
+
             # 特殊检查：curl/wget 带 -X POST/PUT/DELETE 或 --data 视为写操作
             if first_cmd in ("curl", "wget"):
                 write_patterns = [r'-X\s+(POST|PUT|DELETE|PATCH)', r'--data', r'-d\s']
                 for pattern in write_patterns:
-                    if re.search(pattern, cmd_str, re.IGNORECASE):
+                    if re.search(pattern, segment, re.IGNORECASE):
                         return False
+
             # systemctl 非 status/is-active/enabled 也视为写操作
             if first_cmd == "systemctl":
                 write_actions = [
                     'start', 'stop', 'restart', 'reload', 'enable', 'disable',
                     'mask', 'unmask', 'kill', 'set-property',
                 ]
-                cmd_lower = cmd_str.lower()
+                seg_lower = segment.lower()
                 for action in write_actions:
-                    if re.search(rf'\s{action}(\s|$)', cmd_lower):
+                    if re.search(rf'\s{action}(\s|$)', seg_lower):
                         return False
-            # 带重定向（> 或 >>）的命令视为写操作
-            if re.search(r'>>|>[^>]', cmd_str):
-                return False
-            return True
 
-        return False
+            # 带重定向（> 或 >>）视为写操作
+            if re.search(r'>>|>[^>]', segment):
+                return False
+
+        return True
 
     def parse(
         self,

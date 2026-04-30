@@ -21,6 +21,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from ..schemas import APIResponse
+from ...config import get_settings
 from ...safety import (
     # Validator
     validate_command,
@@ -162,16 +163,26 @@ async def api_execute_command(req: ExecuteCommandRequest) -> APIResponse:
     3. sudo 切换到指定用户执行
     4. 超时保护
 
-    ⚠️ 生产环境必须确保 skip_security=False
+    ⚠️ 生产环境（APP_DEBUG=false）下 skip_security 强制无效，始终执行完整安全校验
     """
     if not req.command.strip():
         raise HTTPException(status_code=422, detail="命令不能为空")
+
+    # 生产环境禁止跳过安全校验
+    _settings = get_settings()
+    effective_skip = req.skip_security and _settings.app_debug
+    if req.skip_security and not _settings.app_debug:
+        import logging
+        logging.getLogger(__name__).warning(
+            "拒绝 skip_security 请求：生产环境不允许跳过安全校验 (command=%s)",
+            req.command[:50],
+        )
 
     result = await execute_safe(
         command=req.command,
         user=req.user,
         timeout=req.timeout,
-        skip_security_check=req.skip_security,
+        skip_security_check=effective_skip,
     )
 
     return APIResponse(data={
