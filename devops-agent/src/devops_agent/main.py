@@ -3,7 +3,7 @@ import logging
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -147,20 +147,37 @@ def create_app() -> FastAPI:
     # ============================================================
     #  注册路由模块（Day 4 完成 — 8 个路由端点 + Day 5 动态工具）
     # ============================================================
-    from .api.routes import health, probe, execute, chat, sessions, audit, reasoning, safety, tools, config, mcp, orchestrator
+    from .api.routes import health, probe, execute, chat, sessions, audit, reasoning, safety, tools, config, mcp, orchestrator, auth
+    from .auth.auth import get_current_user
 
-    app.include_router(health.router)          # /health, /api/v1/info
-    app.include_router(probe.router)            # /api/v1/probe/*
-    app.include_router(execute.router)          # /api/v1/execute
-    app.include_router(chat.router)             # /api/v1/chat
-    app.include_router(sessions.router)         # /api/v1/sessions/*
-    app.include_router(audit.router)            # /api/v1/audit/*
-    app.include_router(reasoning.router)        # /api/v1/reasoning/*
-    app.include_router(safety.router)           # /api/v1/safety/*
-    app.include_router(tools.router)            # /api/v1/tools/* (动态工具)
-    app.include_router(config.router)           # /api/v1/config/* (系统配置)
-    app.include_router(mcp.router)              # /api/v1/mcp/* (MCP Server 管理)
-    app.include_router(orchestrator.router)     # /api/v1/orchestrator/* (DAG 编排引擎)
+    # 认证路由（无需鉴权）
+    app.include_router(auth.router)              # /api/v1/auth/*
+
+    # 公开路由（无需鉴权）
+    app.include_router(health.router)            # /health, /api/v1/info
+
+    # 受保护路由（需 JWT 认证）
+    app.include_router(probe.router,             # /api/v1/probe/*
+                       dependencies=[Depends(get_current_user)])
+    app.include_router(execute.router,           # /api/v1/execute
+                       dependencies=[Depends(get_current_user)])
+    app.include_router(chat.router,              # /api/v1/chat
+                       dependencies=[Depends(get_current_user)])
+    app.include_router(sessions.router,          # /api/v1/sessions/*
+                       dependencies=[Depends(get_current_user)])
+    app.include_router(audit.router,             # /api/v1/audit/*
+                       dependencies=[Depends(get_current_user)])
+    app.include_router(reasoning.router,         # /api/v1/reasoning/*
+                       dependencies=[Depends(get_current_user)])
+    app.include_router(safety.router,            # /api/v1/safety/*
+                       dependencies=[Depends(get_current_user)])
+    app.include_router(tools.router,             # /api/v1/tools/*
+                       dependencies=[Depends(get_current_user)])
+    app.include_router(config.router,            # /api/v1/config/*
+                       dependencies=[Depends(get_current_user)])
+    app.include_router(mcp.router,               # /api/v1/mcp/*
+                       dependencies=[Depends(get_current_user)])
+    app.include_router(orchestrator.router)      # /api/v1/orchestrator/*
 
     # 挂载前端静态文件（如果存在）
     import os

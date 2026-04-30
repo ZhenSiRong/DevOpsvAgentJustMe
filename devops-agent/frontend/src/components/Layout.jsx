@@ -1,4 +1,4 @@
-import { Outlet, NavLink, useLocation } from 'react-router-dom'
+import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom'
 import {
   MessageSquare,
   Search,
@@ -13,8 +13,10 @@ import {
   PanelLeftClose,
   Plug,
   Network,
+  LogOut,
 } from 'lucide-react'
 import { useState } from 'react'
+import { useAuth } from '../context/AuthContext'
 
 const navItems = [
   { path: '/', label: 'Agent 对话', icon: MessageSquare },
@@ -31,6 +33,8 @@ export default function Layout() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [navCollapsed, setNavCollapsed] = useState(false)
   const location = useLocation()
+  const navigate = useNavigate()
+  const { logout, user } = useAuth()
 
   return (
     <div className="flex h-screen bg-slate-950 text-slate-100">
@@ -113,6 +117,19 @@ export default function Layout() {
               </>
             )}
           </button>
+
+          {/* 登出按钮 */}
+          {!navCollapsed && (
+            <div className="px-3 pb-2">
+              <button
+                onClick={() => { logout(); navigate('/login'); }}
+                className="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-slate-400 hover:text-red-400 hover:bg-slate-800/50 transition-colors"
+              >
+                <LogOut className="w-4 h-4" />
+                <span>登出{user ? ` (${user.username})` : ''}</span>
+              </button>
+            </div>
+          )}
 
           {!navCollapsed && (
             <div className="px-4 py-3 text-xs text-slate-500">

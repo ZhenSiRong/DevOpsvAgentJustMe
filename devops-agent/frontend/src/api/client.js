@@ -5,14 +5,34 @@
 
 const API_BASE = '/api/v1'
 
+/**
+ * 从 localStorage 获取当前 JWT Token（AuthProvider 登录后存储）
+ */
+function getAuthToken() {
+  try {
+    return localStorage.getItem('auth_token')
+  } catch {
+    return null
+  }
+}
+
 async function request(url, options = {}) {
+  const headers = {
+    'Content-Type': 'application/json',
+    ...options.headers,
+  }
+  const token = getAuthToken()
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
   const res = await fetch(url, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...options.headers,
-    },
+    headers,
     ...options,
   })
+  if (res.status === 401) {
+    // Token 过期，清除本地存储（让 AuthContext 感知）
+    try { localStorage.removeItem('auth_token') } catch {}
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
     throw new Error(err.detail || err.message || `HTTP ${res.status}`)
