@@ -434,6 +434,64 @@ async def run_agent(
 
             return reply_text, ctx
 
+        # ---- 无工具调用 → 直接返回回复 ----
+        if not response.tool_calls:
+            elapsed = time.monotonic() - ctx.start_time
+            reply_text = response.reply_text or "（无回复）"
+
+            # ---- 五段式日志：OUTPUT 阶段 ----
+            await append_reasoning_entry(
+                session_id=sid,
+                round_number=ctx.tool_round + 1,
+                stage="OUTPUT",
+                content=_json.dumps({
+                    "reply": reply_text[:500],
+                    "elapsed_sec": round(elapsed, 2),
+                    "total_tokens": ctx.total_llm_tokens,
+                }, ensure_ascii=False, default=str),
+            )
+
+            # 持久化 assistant 消息
+            await append_message(sid, "assistant", reply_text, session_id=sid)
+
+            logger.info(
+                "会话 %s 完成: %d 轮工具调用, %d 次执行, %.1fs",
+                sid, ctx.tool_round, ctx.execution_count, elapsed,
+            )
+
+            # ---- 自动提取并保存记忆（非阻塞） ----
+            try:
+                mm = get_memory_manager()
+                await mm.extract_and_save_from_session(
+                    session_id=sid,
+                    user_input=user_input,
+                    reply=reply_text,
+                    ctx_info={
+                        "tool_rounds": ctx.tool_round,
+                        "executions": ctx.execution_count,
+                        "probe_calls": ctx.probe_call_count,
+                    },
+                )
+            except Exception as mem_err:
+                logger.warning("记忆提取失败（非阻塞）: %s", mem_err)
+
+            # ---- 自演进循环：Agent 试错 → 知识/记忆/技能更新 ----
+            try:
+                from .evolution import get_evolution_engine
+                evo = get_evolution_engine()
+                await evo.on_agent_complete(
+                    session_id=sid,
+                    user_input=user_input,
+                    reply=reply_text,
+                    tool_rounds=ctx.tool_round,
+                    execution_count=ctx.execution_count,
+                    error_count=0,
+                )
+            except Exception as evo_err:
+                logger.warning("自演进评估失败（非阻塞）: %s", evo_err)
+
+            return reply_text, ctx
+
         # ---- 有工具调用 → DAG 并行或串行执行 ----
         logger.info(
             "LLM 返回 %d 个工具调用", len(response.tool_calls),
