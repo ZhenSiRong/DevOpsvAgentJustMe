@@ -208,13 +208,16 @@ class DatabaseManager:
         return self._db
 
     async def init_tables(self) -> None:
-        """执行建表 SQL（幂等，可重复调用）+ 自动迁移"""
+        """执行建表 SQL（幂等，可重复调用）+ 自动迁移 + DAG 表"""
         db = await self.get_db()
         await db.executescript(CREATE_TABLES_SQL)
         # 自动迁移：为 audit_logs 补充分区执行审计所需的列（兼容已有数据库）
         await self._migrate_audit_logs(db)
+        # DAG 执行记录表
+        from .dag_runs import init_dag_tables
+        await init_dag_tables()
         await db.commit()
-        logger.info("数据库表初始化完成（7 张表）")
+        logger.info("数据库表初始化完成（9 张表）")
 
     async def _migrate_audit_logs(self, db: aiosqlite.Connection) -> None:
         """检查并补充 audit_logs 缺失的列（命令执行审计专用）"""

@@ -111,6 +111,10 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # 速率限制中间件（Token Bucket，默认 60 req/min/IP）
+    from .middleware.rate_limit import RateLimitMiddleware
+    app.add_middleware(RateLimitMiddleware)
+
     # 全局异常处理器（生产环境不泄露内部细节）
     @app.exception_handler(Exception)
     async def global_exception_handler(request: Request, exc: Exception):

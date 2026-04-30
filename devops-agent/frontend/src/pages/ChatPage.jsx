@@ -846,6 +846,7 @@ export default function ChatPage() {
           role: m.role,
           content: m.content,
           id: Math.random().toString(36).slice(2),
+          ...(m.reasoning_events ? { reasoningEvents: m.reasoning_events } : {}),
         }))
         setMessages(msgs)
       }
@@ -903,7 +904,7 @@ export default function ChatPage() {
       await streamChatFetch(userMessage, currentSessionId, (eventType, payload) => {
         setActiveEvent(eventType)
         const evt = { type: eventType, payload, time: Date.now() }
-        setStreamEvents(prev => [...prev, evt])
+        setStreamEvents(prev => [...prev.slice(-199), evt])  // 限制最多 200 条
         currentStreamEvents.push(evt)
 
         if (eventType === 'output') {

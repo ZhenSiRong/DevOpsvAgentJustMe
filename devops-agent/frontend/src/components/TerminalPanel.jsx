@@ -1,4 +1,4 @@
-import { useEffect, useRef, useCallback, useState, forwardRef, useImperativeHandle } from 'react'
+import { useEffect, useRef, useState, forwardRef, useImperativeHandle } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { MessageSquare } from 'lucide-react'
@@ -14,31 +14,31 @@ const TerminalPanel = forwardRef(function TerminalPanel({ visible, chatCollapsed
   const inputBufferRef = useRef('')
   const historyRef = useRef([])
   const historyIndexRef = useRef(-1)
+  const isExecutingRef = useRef(false) // 用 ref 替代 state，避免 useEffect 不稳定依赖
   const [isReady, setIsReady] = useState(false)
-  const [isExecuting, setIsExecuting] = useState(false)
+  const [isExecuting, setIsExecuting] = useState(false) // 仅用于 UI 状态显示
 
-  // 写入提示符
-  const writePrompt = useCallback(() => {
+  // 稳定引用：不依赖外部 state，避免触发 useEffect 重跑
+  const writePromptStable = useRef(() => {
     if (termRef.current) {
       termRef.current.write(PROMPT)
     }
-  }, [])
+  })
 
-  // 执行命令（暴露给父组件）
-  const runCommand = useCallback(async (cmd) => {
-    if (isExecuting) return
+  const runCommandStable = useRef(async (cmd) => {
+    if (isExecutingRef.current) return
     if (!termRef.current) return
     if (!cmd.trim()) {
-      writePrompt()
+      writePromptStable.current()
       return
     }
 
+    isExecutingRef.current = true
     setIsExecuting(true)
     const term = termRef.current
 
     try {
       const res = await executeCommand(cmd.trim(), 30, false, null)
-      // res 结构: { code, data: { status, stdout, stderr, exit_code, execution_time_ms } }
       const data = res.data || res
       if (data.stdout) {
         term.write('\r\n' + data.stdout)
@@ -55,12 +55,13 @@ const TerminalPanel = forwardRef(function TerminalPanel({ visible, chatCollapsed
     } catch (err) {
       term.write('\r\n\x1b[1;31mError: ' + (err.message || String(err)) + '\x1b[0m')
     } finally {
+      isExecutingRef.current = false
       setIsExecuting(false)
-      writePrompt()
+      writePromptStable.current()
     }
-  }, [writePrompt])
+  })
 
-  // 初始化终端
+  // 初始化终端（只执行一次，依赖为空数组）
   useEffect(() => {
     if (!containerRef.current || termRef.current) return
 
@@ -69,10 +70,10 @@ const TerminalPanel = forwardRef(function TerminalPanel({ visible, chatCollapsed
       fontFamily: 'JetBrains Mono, "Fira Code", Consolas, monospace',
       fontSize: 13,
       theme: {
-        background: '#0f172a', // slate-950
-        foreground: '#e2e8f0', // slate-200
-        cursor: '#38bdf8', // sky-400
-        selectionBackground: '#334155', // slate-700
+        background: '#0f172a',
+        foreground: '#e2e8f0',
+        cursor: '#38bdf8',
+        selectionBackground: '#334155',
         black: '#020617',
         red: '#ef4444',
         green: '#22c55e',
@@ -86,7 +87,7 @@ const TerminalPanel = forwardRef(function TerminalPanel({ visible, chatCollapsed
       rows: 24,
       cols: 80,
       allowProposedApi: true,
-      convertEol: true, // ← 将 \n 自动转为 \r\n，解决后端输出换行不对齐
+      convertEol: true,
     })
 
     const fitAddon = new FitAddon()
@@ -95,29 +96,25 @@ const TerminalPanel = forwardRef(function TerminalPanel({ visible, chatCollapsed
     term.open(containerRef.current)
     fitAddon.fit()
 
-    // 欢迎信息
     term.writeln('\x1b[1;36m╔══════════════════════════════════════════╗\x1b[0m')
     term.writeln('\x1b[1;36m║     DevOps Agent — 安全运维终端          ║\x1b[0m')
     term.writeln('\x1b[1;36m╚══════════════════════════════════════════╝\x1b[0m')
     term.writeln('\x1b[2m提示：命令通过安全校验器执行，危险操作将被拦截。\x1b[0m')
     term.writeln('')
 
-    // 键盘处理
     term.onData((data) => {
       const code = data.charCodeAt(0)
 
-      // Enter
       if (data === '\r' || data === '\n') {
         const cmd = inputBufferRef.current
         historyRef.current.push(cmd)
         historyIndexRef.current = historyRef.current.length
         inputBufferRef.current = ''
         term.write('\r\n')
-        runCommand(cmd)
+        runCommandStable.current(cmd)
         return
       }
 
-      // Backspace / Ctrl+H
       if (data === '\x7f' || data === '\b') {
         if (inputBufferRef.current.length > 0) {
           inputBufferRef.current = inputBufferRef.current.slice(0, -1)
@@ -126,30 +123,26 @@ const TerminalPanel = forwardRef(function TerminalPanel({ visible, chatCollapsed
         return
       }
 
-      // Ctrl+C
       if (data === '\x03') {
         inputBufferRef.current = ''
         term.write('^C')
         term.write('\r\n')
-        writePrompt()
+        writePromptStable.current()
         return
       }
 
-      // Ctrl+L
       if (data === '\x0c') {
         term.clear()
-        writePrompt()
+        writePromptStable.current()
         return
       }
 
-      // Up arrow: \x1b[A
       if (data === '\x1b[A') {
         if (historyRef.current.length === 0) return
         if (historyIndexRef.current > 0) {
           historyIndexRef.current -= 1
         }
         const prev = historyRef.current[historyIndexRef.current] || ''
-        // 清空当前输入
         const currentLen = inputBufferRef.current.length
         for (let i = 0; i < currentLen; i++) term.write('\b \b')
         inputBufferRef.current = prev
@@ -157,7 +150,6 @@ const TerminalPanel = forwardRef(function TerminalPanel({ visible, chatCollapsed
         return
       }
 
-      // Down arrow: \x1b[B
       if (data === '\x1b[B') {
         if (historyRef.current.length === 0) return
         if (historyIndexRef.current < historyRef.current.length - 1) {
@@ -176,12 +168,10 @@ const TerminalPanel = forwardRef(function TerminalPanel({ visible, chatCollapsed
         return
       }
 
-      // 忽略其他控制序列（如左右箭头、Home/End 等）
       if (code < 32 && data !== '\t') {
         return
       }
 
-      // 普通字符输入
       inputBufferRef.current += data
       term.write(data)
     })
@@ -189,25 +179,15 @@ const TerminalPanel = forwardRef(function TerminalPanel({ visible, chatCollapsed
     termRef.current = term
     fitAddonRef.current = fitAddon
     setIsReady(true)
-    writePrompt()
+    writePromptStable.current()
 
-    // 尺寸自适应
     const handleResize = () => {
-      try {
-        fitAddon.fit()
-      } catch (e) {
-        // ignore
-      }
+      try { fitAddon.fit() } catch (e) { /* ignore */ }
     }
     window.addEventListener('resize', handleResize)
 
-    // 可见性变化时重新计算尺寸
     const ro = new ResizeObserver(() => {
-      try {
-        fitAddon.fit()
-      } catch (e) {
-        // ignore
-      }
+      try { fitAddon.fit() } catch (e) { /* ignore */ }
     })
     if (containerRef.current) {
       ro.observe(containerRef.current)
@@ -220,16 +200,16 @@ const TerminalPanel = forwardRef(function TerminalPanel({ visible, chatCollapsed
       termRef.current = null
       fitAddonRef.current = null
     }
-  }, [runCommand, writePrompt])
+  }, [])  // 空依赖：终端只初始化一次，函数引用通过 ref 稳定化
 
-  // 暴露方法给父组件
+  // 暴露方法给父组件（通过 ref 稳定引用）
   useImperativeHandle(ref, () => ({
     runCommand: (cmd) => {
       if (termRef.current) {
         termRef.current.write(cmd)
         termRef.current.write('\r\n')
       }
-      runCommand(cmd)
+      runCommandStable.current(cmd)
     },
   }))
 
@@ -264,8 +244,6 @@ const TerminalPanel = forwardRef(function TerminalPanel({ visible, chatCollapsed
             </button>
           )}
           <div className={`w-2 h-2 rounded-full ${isExecuting ? 'bg-amber-400 animate-pulse' : 'bg-emerald-500'}`} />
-          <span className="text-xs font-medium text-slate-300">安全终端</span>
-          {isExecuting && (
             <span className="text-xs text-amber-400">执行中...</span>
           )}
         </div>
@@ -274,7 +252,7 @@ const TerminalPanel = forwardRef(function TerminalPanel({ visible, chatCollapsed
             onClick={() => {
               if (termRef.current) {
                 termRef.current.clear()
-                writePrompt()
+                writePromptStable.current()
               }
             }}
             className="px-2 py-0.5 text-[10px] text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded transition-colors"

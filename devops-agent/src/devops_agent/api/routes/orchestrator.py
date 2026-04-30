@@ -24,17 +24,11 @@ from ...orchestrator import (
     RollbackGenerator,
 )
 from ...orchestrator.task import GraphRunStatus
+from ...db.dag_runs import save_dag_run, list_dag_runs, get_dag_run
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/orchestrator", tags=["DAG 编排引擎"])
-
-
-# ============================================================
-#  运行时存储（MVP 用内存，后续迁移 SQLite）
-# ============================================================
-
-_run_records: dict[str, dict] = {}
 
 
 # ============================================================
@@ -119,8 +113,8 @@ async def run_dag(body: RunRequest) -> APIResponse:
         record = await parse_and_run(tc_list, ctx, session_id=body.session_id)
         record_dict = record.to_dict()
 
-        # 存储记录
-        _run_records[record.run_id] = record_dict
+        # 持久化到数据库
+        await save_dag_run(record_dict)
 
         return APIResponse(data=record_dict)
 
@@ -133,25 +127,27 @@ async def run_dag(body: RunRequest) -> APIResponse:
 
 @router.get("/runs", response_model=APIResponse, summary="查询 DAG 执行历史")
 async def list_runs() -> APIResponse:
-    """返回所有 DAG 执行记录摘要"""
+    """返回所有 DAG 执行记录摘要（从数据库读取）"""
+    recs = await list_dag_runs()
     summaries = []
-    for run_id, rec in _run_records.items():
+    for rec in recs:
         summaries.append({
-            "run_id": run_id,
+            "run_id": rec["run_id"],
             "session_id": rec.get("session_id", ""),
             "status": rec.get("status", ""),
             "total_nodes": rec.get("total_nodes", 0),
             "success_count": rec.get("success_count", 0),
             "failed_count": rec.get("failed_count", 0),
             "total_execution_ms": rec.get("total_execution_ms", 0),
+            "created_at": rec.get("created_at", ""),
         })
     return APIResponse(data=summaries)
 
 
 @router.get("/runs/{run_id}", response_model=APIResponse, summary="查询 DAG 执行详情")
 async def get_run(run_id: str) -> APIResponse:
-    """查询指定 DAG 执行记录的详细信息"""
-    rec = _run_records.get(run_id)
+    """查询指定 DAG 执行记录的详细信息（从数据库读取）"""
+    rec = await get_dag_run(run_id)
     if not rec:
         return APIResponse(code=404, message=f"执行记录 {run_id} 不存在")
     return APIResponse(data=rec)
@@ -169,7 +165,7 @@ async def confirm_rollback(run_id: str, body: RollbackConfirmRequest) -> APIResp
     仅展示回滚计划，需要用户显式确认后才执行。
     当前版本只返回回滚命令列表供用户手动执行。
     """
-    rec = _run_records.get(run_id)
+    rec = await get_dag_run(run_id)
     if not rec:
         return APIResponse(code=404, message=f"执行记录 {run_id} 不存在")
 
