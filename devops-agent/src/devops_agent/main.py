@@ -147,11 +147,18 @@ def create_app() -> FastAPI:
     # ============================================================
     #  注册路由模块（Day 4 完成 — 8 个路由端点 + Day 5 动态工具）
     # ============================================================
-    from .api.routes import health, probe, execute, chat, sessions, audit, reasoning, safety, tools, config, mcp, orchestrator, auth
+    from .api.routes import health, probe, execute, chat, sessions, audit, reasoning, safety, tools, config, mcp, orchestrator, auth, prompt, knowledge
     from .auth.auth import get_current_user
 
     # 认证路由（无需鉴权）
     app.include_router(auth.router)              # /api/v1/auth/*
+
+    # 可观测性（Prometheus metrics，无需鉴权）
+    @app.get("/metrics")
+    async def metrics():
+        from fastapi.responses import PlainTextResponse
+        from .metrics import render_metrics
+        return PlainTextResponse(render_metrics(), media_type="text/plain; charset=utf-8")
 
     # 公开路由（无需鉴权）
     app.include_router(health.router)            # /health, /api/v1/info
@@ -178,6 +185,12 @@ def create_app() -> FastAPI:
     app.include_router(mcp.router,               # /api/v1/mcp/*
                        dependencies=[Depends(get_current_user)])
     app.include_router(orchestrator.router)      # /api/v1/orchestrator/*
+
+    # 知识库 + Prompt 管理（需认证）
+    app.include_router(prompt.router,             # /api/v1/prompt/*
+                       dependencies=[Depends(get_current_user)])
+    app.include_router(knowledge.router,          # /api/v1/knowledge/*
+                       dependencies=[Depends(get_current_user)])
 
     # 挂载前端静态文件（如果存在）
     import os

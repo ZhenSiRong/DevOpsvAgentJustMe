@@ -76,6 +76,24 @@ async def execute_command(
             },
         )
 
+    # ---- 幂等检查 ----
+    from ...safety.idempotency import get_idempotency_guard, OperationState
+    ikey = body.idempotency_key
+    if ikey:
+        guard = get_idempotency_guard()
+        existing = await guard.check(ikey)
+        if existing and existing.state in (
+            OperationState.SUCCESS,
+            OperationState.FAILED,
+            OperationState.BLOCKED,
+            OperationState.TIMEDOUT,
+        ):
+            logger.info("幂等命中: key=%s state=%s", ikey, existing.state)
+            return APIResponse(
+                data={**(existing.result or {}), "idempotent": True, "cached_state": existing.state},
+                message=f"幂等返回（状态: {existing.state}）",
+            )
+
     # ---- 真实执行 ----
     # 运维者模式：需显式 X-Operator-Mode header 标记，仍过安全校验但跳过白名单
     # 普通/Agent 模式：同时经过安全校验 + 白名单检查（默认更安全）
@@ -113,6 +131,21 @@ async def execute_command(
             "executed_by": result.executed_by,
             "security_check": result.security_check,
         }
+
+        # 幂等结果缓存
+        if ikey:
+            state_map = {
+                "SUCCESS": OperationState.SUCCESS,
+                "FAILED": OperationState.FAILED,
+                "TIMEOUT": OperationState.TIMEDOUT,
+                "REJECTED": OperationState.FAILED,
+                "BLOCKED": OperationState.BLOCKED,
+            }
+            await guard.mark_complete(
+                ikey,
+                state_map.get(result.status.value, OperationState.FAILED),
+                response_data,
+            )
 
         # 根据状态决定 HTTP 状态码
         http_code = _map_status_to_http(result.status)

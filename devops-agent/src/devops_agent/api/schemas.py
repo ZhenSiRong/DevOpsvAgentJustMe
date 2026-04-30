@@ -117,6 +117,7 @@ class ExecuteRequest(BaseModel):
     timeout: float = Field(default=30.0, ge=1.0, le=300.0, description="超时时间(秒)")
     dry_run: bool = Field(default=False, description="试运行模式（只校验不执行）")
     session_id: str | None = Field(default=None, description="关联的会话 ID（可选，用于审计追踪）")
+    idempotency_key: str | None = Field(default=None, description="幂等键，相同 key 返回缓存结果（防重复执行）")
 
 
 class ExecuteResponse(BaseModel):
