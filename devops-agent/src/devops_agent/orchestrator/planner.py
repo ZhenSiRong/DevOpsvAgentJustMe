@@ -160,9 +160,15 @@ class PlanParser:
 
         for segment in segments:
             # 提取该段的首个命令词
-            first_cmd = segment.split()[0] if segment else ""
+            words = segment.split()
+            if not words:
+                return False
+            first_cmd = words[0]
             # 去掉 sudo / 路径等前缀
             first_cmd = re.sub(r'^(sudo|/usr/bin/|/bin/|/usr/sbin/|/sbin/)', '', first_cmd)
+            # sudo 被去掉后为空 → 取第二个词作为实际命令
+            if not first_cmd and len(words) > 1:
+                first_cmd = words[1]
 
             if first_cmd not in readonly_commands:
                 return False

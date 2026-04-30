@@ -529,7 +529,7 @@ class TestParseAndRunIntegration:
             {"name": "cpu_info", "arguments": {}, "id": "c1"},
             {"name": "execute_command", "arguments": {"command": "ls"}, "id": "c2"},
         ]
-        graph = parse_tool_calls(calls, sess_id="sum_test")
+        graph = parse_tool_calls(calls, session_id="sum_test")
         summary = graph.to_summary_dict()
 
         assert summary["node_count"] == 2
