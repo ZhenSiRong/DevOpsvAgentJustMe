@@ -243,30 +243,28 @@ DAGNode     (按 run_id 关联，含状态/结果/回滚)
 (运行时)
 Config      (全局键值对，无外键)
 
-(安全)
-WhitelistPaths (系统级写保护配置)
-InjectionAttempts (提示词注入日志)
+(定时任务)
+ScheduledTask   (独立表)
+TaskRunLog      (按 task_id 关联)
 ```
 
-**15 个 SQLite 表清单：**
+**13 个 SQLite 表清单：**
 
-| 表 | 说明 | 关键字段 |
+| 表 | 说明 | 定义位置 |
 |----|------|---------|
-| `sessions` | 会话 | id, title, user_id, created_at |
-| `messages` | 消息 | id, session_id, role, content, tool_calls |
-| `audit_logs` | 审计日志 | id, session_id, stage, content, created_at |
-| `configs` | 键值配置 | key, value, is_overridden |
-| `conversation_state` | 对话状态快照 | session_id, context_summary |
-| `memories` | 长期记忆(RAG) | id, session_id, type, content, importance |
-| `reasoning` | 推理链路 | id, session_id, round, stage, content |
-| `dynamic_tools` | 动态注册工具 | id, name, description, command_template |
-| `mcp_servers` | MCP 连接配置 | id, name, command, args, enabled |
-| `dag_runs` | DAG 执行记录 | id, session_id, status, graph_json |
-| `users` | 用户 | id, username, password_hash, role |
-| `whitelist_paths` | 写保护白名单 | path |
-| `injection_attempts` | 注入检测日志 | id, input, severity, blocked |
-| `access_tokens` | JWT 刷新令牌 | id, user_id, token, expires_at |
-| `memorization_log` | 记忆提取日志 | session_id, extracted_count |
+| `sessions` | 会话 | connection.py |
+| `messages` | 消息 | connection.py |
+| `audit_logs` | 审计日志 | connection.py |
+| `configs` | 键值配置 | connection.py |
+| `conversation_state` | 对话状态快照 | connection.py |
+| `scheduled_tasks` | 定时任务 | connection.py |
+| `task_run_logs` | 任务执行日志 | connection.py |
+| `memories` | 长期记忆(RAG) | connection.py |
+| `reasoning_chains` | 推理链路 | connection.py |
+| `dynamic_tools` | 动态工具 | connection.py |
+| `mcp_servers` | MCP 连接配置 | connection.py |
+| `dag_runs` | DAG 运行 | dag_runs.py |
+| `dag_nodes` | DAG 节点 | dag_runs.py |
 
 ## 关键设计决策说明
 

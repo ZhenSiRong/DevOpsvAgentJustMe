@@ -34,7 +34,7 @@
 | **01** | [业务目标](01-business-goals.md) | 先理解"为什么做这个项目"——场景、痛点、四大业务目标 |
 | **02** | [功能清单](02-functional-requirements.md) | 再看"要做什么"——功能点与赛题评分权重对照 |
 | **03** | [核心流程](03-core-workflow.mmd) | 理解"怎么做"——对话交互时序、五段式推理链路 |
-| **04** | [数据模型](04-data-model.md) | 数据层设计——Pydantic Schema、ORM、15 个 SQLite 表 |
+| **04** | [数据模型](04-data-model.md) | 数据层设计——Pydantic Schema、ORM、13 个 SQLite 表 |
 | **05** | [接口契约](05-api-contract.md) | 接口层设计——17 个路由模块、SSE 流式、统一响应格式 |
 | **06** | [技术栈选型](06-tech-stack.md) | 技术决策——为什么选 React 18 + FastAPI + SQLite |
 | **07** | [架构设计](07-architecture.mmd) | 全局架构——系统分层、组件关系、部署视图 |
@@ -64,7 +64,7 @@
 
 ### 04 数据模型
 - Request/Response Pydantic Schema
-- SQLite ORM 模型（15 个表）
+- SQLite ORM 模型（13 个表）
 - 模型关系图 + 关键设计决策
 
 ### 05 接口契约
