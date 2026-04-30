@@ -143,15 +143,17 @@ class ModelRouter:
         self._init_default_pool()
 
     def _init_default_pool(self) -> None:
-        """初始化默认模型池（三级梯队）"""
+        """初始化默认模型池（三级梯队）—— 从 Settings 和环境变量读取"""
         import os
+        from ..config import get_settings
+        settings = get_settings()
 
         defaults = [
             ModelEndpoint(
                 name="MiniMax-M2.1",
-                base_url="https://api.minimaxi.com/v1",
-                api_key=os.environ.get("LLM_API_KEY", ""),
-                model_id="MiniMax-M2.1",
+                base_url=settings.llm_base_url or "https://api.minimaxi.com/v1",
+                api_key=settings.llm_api_key or os.environ.get("LLM_API_KEY", ""),
+                model_id=settings.llm_model or "MiniMax-M2.1",
                 protocol="openai",
                 priority=0,
             ),
