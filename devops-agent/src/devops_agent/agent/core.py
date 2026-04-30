@@ -183,6 +183,21 @@ def build_system_prompt() -> str:
 
 # ============================================================
 #  核心 Agent 循环
+#
+#  ⚠️ 重构提示 (P2): run_agent() 和 run_agent_stream() 约 600 行重复代码。
+#  共享部分：
+#    (1) 初始化上下文（LLM config / session_id / AgentContext / system_prompt）
+#    (2) 记忆注入 + 历史消息加载 + 提示词注入检测
+#    (3) 推理链路日志（SENSE → ANALYZE → PLAN → EXECUTE → OUTPUT）
+#    (4) LLM 调用（双协议 fallback: OpenAI → Anthropic）
+#    (5) 工具调用分发 + 结果回传 + 审计写库
+#
+#  建议重构方向：
+#   - 提取 _build_messages() 函数合并初始化逻辑
+#   - 提取 _run_tool_use_loop() 将 LLM ↔ Tool 循环做成 async generator
+#   - run_agent() 收集结果返回；run_agent_stream() 封装事件 yield
+# 
+#  当前不做此重构（P2 优先级，改动风险：核心引擎回归）
 # ============================================================
 
 async def run_agent(
