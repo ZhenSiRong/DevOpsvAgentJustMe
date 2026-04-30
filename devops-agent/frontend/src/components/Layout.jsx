@@ -14,6 +14,8 @@ import {
   Plug,
   Network,
   LogOut,
+  Brain,
+  Sparkles,
 } from 'lucide-react'
 import { useState } from 'react'
 import { useAuth } from '../context/AuthContext'
@@ -26,6 +28,8 @@ const navItems = [
   { path: '/reasoning', label: '推理链路', icon: GitBranch },
   { path: '/orchestrator', label: '任务编排', icon: Network },
   { path: '/mcp', label: 'MCP 管理', icon: Plug },
+  { path: '/evolution', label: '自演进', icon: Brain },
+  { path: '/skills', label: 'Skills', icon: Sparkles },
   { path: '/settings', label: '系统设置', icon: Settings },
 ]
 

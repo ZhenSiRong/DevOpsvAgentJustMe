@@ -24,6 +24,8 @@ from ...db import (
     count_messages_by_session,
     get_audit_logs_by_session,
 )
+from ...db.reasoning import get_reasoning_chain
+import json as _json
 
 
 class SessionCreateRequest(BaseModel):
@@ -96,19 +98,70 @@ async def get_session_route(session_id: str) -> APIResponse:
     exec_count = sum(1 for a in audit_logs if a.phase == "execution")
     probe_count = sum(1 for a in audit_logs if a.phase in ("received", "sense"))
 
+    # 加载推理链路，转换为前端 SSE 事件格式后按 round 分组
+    reasoning_entries = await get_reasoning_chain(session_id)
+    STAGE_TO_EVENT_TYPE = {
+        "SENSE": "sense", "ANALYZE": "analyze",
+        "PLAN": "plan", "EXECUTE": "execute", "OUTPUT": "output",
+    }
+    from collections import defaultdict
+    reasoning_by_round: dict[int, list[dict]] = defaultdict(list)
+    for entry in reasoning_entries:
+        event_type = STAGE_TO_EVENT_TYPE.get(entry.stage, entry.stage.lower())
+        payload = _json.loads(entry.content) if entry.content else {}
+        evt = {"type": event_type, "payload": payload, "time": entry.created_at}
+        reasoning_by_round[entry.round_number].append(evt)
+        if entry.stage == "EXECUTE":
+            reasoning_by_round[entry.round_number].append({
+                "type": "execute_done", "payload": payload, "time": entry.created_at,
+            })
+
+    # 将推理链路合并到 assistant 消息上
+    # 策略：一个 user+assistant 对话可能产生多个 round（工具调用循环），
+    # 但最终只有一条 assistant 消息。将所有 round 的事件按顺序合并到该消息上。
+    msg_list: list[dict[str, Any]] = []
+    assistant_idx = 0
+    sorted_rounds = sorted(reasoning_by_round.keys()) if reasoning_by_round else []
+    for m in messages:
+        msg_item: dict[str, Any] = {
+            "role": m.role,
+            "content": m.content[:2000],
+            "tool_calls": m.tool_calls,
+        }
+        if m.role == "assistant" and sorted_rounds:
+            # 收集当前 assistant 消息应承载的所有 round 事件
+            merged_events: list[dict] = []
+            while assistant_idx < len(sorted_rounds):
+                # 判断是否该归入当前 assistant：
+                # 如果还有下一个 round 且下一个 round 的第一个事件不是 SENSE，
+                # 说明是同一轮对话的工具调用延续（round N+1 没有 SENSE）
+                rnd = sorted_rounds[assistant_idx]
+                round_events = reasoning_by_round.get(rnd, [])
+                merged_events.extend(round_events)
+                assistant_idx += 1
+                # 检查下一个 round 是否以 SENSE 开头（新对话的标志）
+                if assistant_idx < len(sorted_rounds):
+                    next_rnd = sorted_rounds[assistant_idx]
+                    next_events = reasoning_by_round.get(next_rnd, [])
+                    next_first_stage = None
+                    for e in next_events:
+                        if e["type"] in ("sense", "start"):
+                            next_first_stage = e["type"]
+                            break
+                    if next_first_stage == "sense":
+                        break  # 下一个 round 是新对话的开始，停止合并
+                else:
+                    break  # 没有更多 round 了
+            if merged_events:
+                msg_item["reasoning_events"] = merged_events
+        msg_list.append(msg_item)
+
     return APIResponse(
         data=SessionDetail(
             session_id=session.id,
             created_at=session.created_at,
             updated_at=session.updated_at,
-            messages=[
-                {
-                    "role": m.role,
-                    "content": m.content[:2000],
-                    "tool_calls": m.tool_calls,
-                }
-                for m in messages
-            ],
+            messages=msg_list,
             execution_count=exec_count,
             probe_call_count=probe_count,
         ).model_dump(),

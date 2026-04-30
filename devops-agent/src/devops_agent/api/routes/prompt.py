@@ -22,8 +22,8 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from ..api.schemas import APIResponse
-from ..agent.core import build_system_prompt
+from ..schemas import APIResponse
+from ...agent.core import build_system_prompt
 
 logger = logging.getLogger(__name__)
 

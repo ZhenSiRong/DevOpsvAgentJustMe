@@ -224,7 +224,7 @@ async def chat_retry(body: RetryRequest) -> StreamingResponse:
         raise HTTPException(status_code=404, detail=f"会话 {session_id} 不存在")
 
     # 加载会话全部消息
-    all_messages = await get_messages_by_session(session_id, page=1, page_size=1000)
+    all_messages, _ = await get_messages_by_session(session_id, page=1, page_size=1000)
     if not all_messages:
         raise HTTPException(status_code=400, detail="会话中没有消息，无法重试")
 

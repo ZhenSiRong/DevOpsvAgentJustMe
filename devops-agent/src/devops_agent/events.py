@@ -86,14 +86,14 @@ bus = EventBus()
 @bus.on("command_executed")
 async def _on_command_executed(data: dict) -> None:
     """命令执行后：记录 Metrics"""
-    from ..metrics import record_command_executed
+    from .metrics import record_command_executed
     record_command_executed(data.get("status", "UNKNOWN"))
 
 
 @bus.on("llm_called")
 async def _on_llm_called(data: dict) -> None:
     """LLM 调用后：记录 Metrics"""
-    from ..metrics import record_llm_call
+    from .metrics import record_llm_call
     record_llm_call(
         protocol=data.get("protocol", "openai"),
         duration=data.get("duration", 0.0),
@@ -103,7 +103,7 @@ async def _on_llm_called(data: dict) -> None:
 @bus.on("tool_called")
 async def _on_tool_called(data: dict) -> None:
     """工具调用后：记录 Metrics"""
-    from ..metrics import record_tool_call
+    from .metrics import record_tool_call
     record_tool_call(
         tool_name=data.get("tool_name", "unknown"),
         duration=data.get("duration", 0.0),
@@ -113,7 +113,7 @@ async def _on_tool_called(data: dict) -> None:
 @bus.on("security_blocked")
 async def _on_security_blocked(data: dict) -> None:
     """安全拦截后：记录 Metrics"""
-    from ..metrics import record_security_block
+    from .metrics import record_security_block
     record_security_block()
 
 

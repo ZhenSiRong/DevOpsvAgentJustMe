@@ -11,6 +11,8 @@ import ReasoningPage from './pages/ReasoningPage'
 import SettingsPage from './pages/SettingsPage'
 import MCPPage from './pages/MCPPage'
 import OrchestratorPage from './pages/OrchestratorPage'
+import EvolutionPage from './pages/EvolutionPage'
+import SkillsPage from './pages/SkillsPage'
 
 function App() {
   return (
@@ -28,6 +30,8 @@ function App() {
           <Route path="orchestrator" element={<OrchestratorPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="mcp" element={<MCPPage />} />
+          <Route path="evolution" element={<EvolutionPage />} />
+          <Route path="skills" element={<SkillsPage />} />
         </Route>
       </Routes>
     </AuthProvider>

@@ -161,6 +161,55 @@ async def list_tools(active_only: bool = False):
     )
 
 
+class RegistryToolItem(BaseModel):
+    name: str
+    description: str
+    is_builtin: bool
+    source: str
+    parameters: dict
+
+
+class RegistryToolsResponse(BaseModel):
+    tools: list[RegistryToolItem]
+    total: int
+    builtin_count: int
+    dynamic_count: int
+    mcp_count: int
+
+
+@router.get("/registry", response_model=RegistryToolsResponse)
+async def list_registry_tools():
+    registry = get_registry()
+    mcp_tool_names: set[str] = set()
+    for client in registry._mcp_clients.values():
+        for tool_def in getattr(client, "tools", []):
+            mcp_tool_names.add(tool_def.get("name", ""))
+    tools: list[RegistryToolItem] = []
+    builtin_count = dynamic_count = mcp_count = 0
+    for name in registry.list_names():
+        tool = registry.get(name)
+        if tool is None:
+            continue
+        is_builtin = registry.is_builtin(name)
+        is_mcp = name in mcp_tool_names
+        if is_builtin:
+            builtin_count += 1
+        elif is_mcp:
+            mcp_count += 1
+        else:
+            dynamic_count += 1
+        source = "builtin" if is_builtin else ("mcp" if is_mcp else "dynamic")
+        tools.append(RegistryToolItem(
+            name=name, description=tool.description,
+            is_builtin=is_builtin, source=source,
+            parameters=tool.parameters if isinstance(tool.parameters, dict) else {},
+        ))
+    return RegistryToolsResponse(
+        tools=tools, total=len(tools),
+        builtin_count=builtin_count, dynamic_count=dynamic_count, mcp_count=mcp_count,
+    )
+
+
 @router.get("/{tool_id}", response_model=ToolResponse)
 async def get_tool(tool_id: int):
     """获取指定动态工具的详情。"""
@@ -332,80 +381,4 @@ async def test_tool(tool_id: int, request: ToolTestRequest):
 
 
 # ============================================================
-#  注册中心工具列表（内置 + 动态 + MCP）
-# ============================================================
 
-class RegistryToolItem(BaseModel):
-    """注册中心中的单个工具信息"""
-    name: str
-    description: str
-    is_builtin: bool
-    source: str  # "builtin" | "dynamic" | "mcp"
-    parameters: dict
-
-
-class RegistryToolsResponse(BaseModel):
-    """注册中心工具列表响应"""
-    tools: list[RegistryToolItem]
-    total: int
-    builtin_count: int
-    dynamic_count: int
-    mcp_count: int
-
-
-@router.get("/registry", response_model=RegistryToolsResponse)
-async def list_registry_tools():
-    """
-    列出注册中心中所有已注册的工具。
-
-    包括：
-    - 内置工具（代码中注册的 ProbeTool）
-    - 动态工具（从数据库加载的 DynamicMCPTool）
-    - MCP Server 工具（外部 MCP Server 连接后注册的 ExternalMCPTool）
-
-    前端 MCP 管理页面用此接口展示「已注册工具」全景。
-    """
-    registry = get_registry()
-
-    # 收集 MCP Server 注册的工具名称（用于判断来源）
-    mcp_tool_names: set[str] = set()
-    for client in registry._mcp_clients.values():
-        for tool_def in getattr(client, "tools", []):
-            mcp_tool_names.add(tool_def.get("name", ""))
-
-    tools: list[RegistryToolItem] = []
-    builtin_count = 0
-    dynamic_count = 0
-    mcp_count = 0
-
-    for name in registry.list_names():
-        tool = registry.get(name)
-        if tool is None:
-            continue
-
-        is_builtin = registry.is_builtin(name)
-        is_mcp = name in mcp_tool_names
-
-        if is_builtin:
-            builtin_count += 1
-        elif is_mcp:
-            mcp_count += 1
-        else:
-            dynamic_count += 1
-
-        source = "builtin" if is_builtin else ("mcp" if is_mcp else "dynamic")
-        tools.append(RegistryToolItem(
-            name=name,
-            description=tool.description,
-            is_builtin=is_builtin,
-            source=source,
-            parameters=tool.parameters if isinstance(tool.parameters, dict) else {},
-        ))
-
-    return RegistryToolsResponse(
-        tools=tools,
-        total=len(tools),
-        builtin_count=builtin_count,
-        dynamic_count=dynamic_count,
-        mcp_count=mcp_count,
-    )

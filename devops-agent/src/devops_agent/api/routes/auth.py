@@ -12,12 +12,12 @@ from datetime import timedelta
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from .auth import (
+from ...auth.auth import (
     verify_login,
     create_access_token,
     get_current_user,
 )
-from ..api.schemas import APIResponse
+from ..schemas import APIResponse
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +57,7 @@ async def login(body: LoginRequest) -> APIResponse:
             detail="用户名或密码错误",
         )
 
-    from ..config import get_settings
+    from ...config import get_settings
     settings = get_settings()
     expires_delta = timedelta(minutes=settings.jwt_expire_minutes)
     token = create_access_token(
@@ -82,7 +82,7 @@ async def refresh_token(
     current_user: dict = Depends(get_current_user),
 ) -> APIResponse:
     """使用当前有效 Token 换取新 Token（延长过期时间）。"""
-    from ..config import get_settings
+    from ...config import get_settings
     settings = get_settings()
     expires_delta = timedelta(minutes=settings.jwt_expire_minutes)
     token = create_access_token(
